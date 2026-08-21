@@ -1,0 +1,13 @@
+# Invariant Guardrails policy (real DSL, evaluated by LocalPolicy).
+# Causal / trajectory rule: data read from the inbox that later flows into an
+# external send_email is exfiltration. Uses only the flow operator + tool
+# matchers — NO ML detector — so the sidecar needs no torch/transformers.
+#
+# This is the behavior/causal axis rule for the MVP demo. The three tool calls
+# (get_inbox, read_customer_db, send_email) are each individually legitimate;
+# the DSL catches the dangerous CHAIN.
+
+raise "Inbox/customer data exfiltrated to external email address" if:
+    (call: ToolCall) -> (call2: ToolCall)
+    call is tool:get_inbox
+    call2 is tool:send_email({ to: ".*@gmail.com" })

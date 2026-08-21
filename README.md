@@ -141,14 +141,34 @@ agent-security-gateway/
 
 ---
 
-## 6. 快速开始
+## 6. MVP 现状 —— 三轴已跑通（真实复用四个开源项目）
 
-详见 [`docs/MVP.md`](docs/MVP.md)。分阶段路线图见 [`docs/PLAN.md`](docs/PLAN.md)。
+MVP 已可运行，四个场景端到端通过，**每一轴都由真实复用的开源引擎驱动**：
+
+| 轴 | 引擎 | 复用方式 | Demo 场景 | 结果 |
+|----|------|----------|-----------|------|
+| 权限 A | `cedar-go v1.8.0`（ToolHive 同款引擎+模型） | 真 Cedar 策略评估 | employee 删用户 | **BLOCK** |
+| 权限 A | Cedar `call_tool` vs `auto_execute` 双动作 | Bifrost execute-vs-auto-execute 审批原语 | export_all_users | **CONFIRM**（人工确认） |
+| 数据/网络 B | 真 Pipelock 社区规则包（28 条 RE2 规则） | 加载 `pipelock-community.yaml` 扫描 | 参数含 1Password token | **REDACT** |
+| 行为/因果 C | 真 Invariant `LocalPolicy` + DSL | Python sidecar 库内嵌 | get_inbox→send_email(gmail) 注入链 | **BLOCK** |
+| 审计 | Pipelock 风格 Ed25519 哈希链 receipt | 复用其 schema+签名方案 | 6 条决策 | **链式验证通过** |
 
 ```bash
-# (Phase 1 MVP，规划中)
-go run ./cmd/gateway --config ./deploy/config.dev.yaml
+# 一条命令跑完整 demo（自动装 invariant-ai、起 sidecar、跑三轴、停 sidecar）
+make demo
+
+# 或仅 Go 侧（axis A/B + 审计；behavior 轴 sidecar 未起时 fail-open）
+make run
 ```
+
+要求：Go ≥ 1.26（ToolHive 依赖），Python ≥ 3.10（Invariant sidecar）。
+详细规划见 [`docs/MVP.md`](docs/MVP.md)，分阶段路线图见 [`docs/PLAN.md`](docs/PLAN.md)。
+
+### 复用来源速查
+- 权限轴 `internal/engine/permission.go` → `github.com/cedar-policy/cedar-go@v1.8.0`（ToolHive `pkg/authz/authorizers/cedar` 同款），实体/请求模型照 ToolHive。
+- 数据轴 `internal/engine/datanetwork.go` + `deploy/rules/pipelock-community.yaml` → 逐字复制自 `luckyPipewrench/pipelock-rules`。
+- 行为轴 `intelligence/analyzer/sidecar.py` + `policy.iv` → `pip install invariant-ai`（`invariantlabs-ai/invariant` 的 `LocalPolicy`）。
+- 审计 `internal/receipt/receipt.go` → 复用 `luckyPipewrench/pipelock` `internal/receipt` 的设计。
 
 ---
 

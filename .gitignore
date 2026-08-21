@@ -25,3 +25,8 @@ venv/
 .DS_Store
 .idea/
 .vscode/
+
+# MVP artifacts
+last-receipt.json
+intelligence/.venv/
+/tmp/asg-sidecar.log

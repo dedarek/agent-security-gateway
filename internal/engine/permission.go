@@ -2,81 +2,126 @@ package engine
 
 import (
 	"context"
-	"strings"
+	"fmt"
+	"os"
+	"sync"
+
+	cedar "github.com/cedar-policy/cedar-go"
 
 	"github.com/dedarek/agent-security-gateway/api"
 )
 
-// PermissionEngine is a stub implementation of the permission axis (ToolHive
-// class). In production this vendors ToolHive's near-zero-coupling
-// authorizers.Authorizer interface (pkg/authz/authorizers) and delegates to its
-// Cedar backend; enforcement follows the vmcp/core.Admission pattern (one
-// authorizer driving both list-filter and call-deny). This stub hard-codes a
-// couple of rules so the MVP demo runs end-to-end.
+// PermissionEngine is the permission axis (ToolHive class). It uses cedar-go
+// v1.8.0 — the exact engine ToolHive wraps in pkg/authz/authorizers/cedar — and
+// mirrors ToolHive's entity/request model:
 //
-// See docs/BASE-PROJECTS-ANALYSIS.md §1 and docs/PLAN.md Phase 1.
+//	principal  Client::"<agent-id>"   with a `role` attribute for RBAC
+//	action     Action::"call_tool"    (may it run at all?)  deny => BLOCK
+//	action     Action::"auto_execute" (run without approval?) deny => CONFIRM
+//	resource   Tool::"<tool-id>"
+//
+// The two-action check implements Bifrost's execute-vs-auto-execute split as the
+// human-in-the-loop primitive. See docs/BASE-PROJECTS-ANALYSIS.md §1 & §3.4.
 type PermissionEngine struct {
-	// deny lists a tool_id that is always blocked for a given role.
-	denyForRole map[string][]string
-	// confirm lists sensitive tools that require human approval.
-	confirm map[string]bool
+	mu        sync.RWMutex
+	policySet *cedar.PolicySet
 }
 
-func NewPermissionEngine() *PermissionEngine {
-	return &PermissionEngine{
-		denyForRole: map[string][]string{
-			"employee": {"database.delete_user"},
-		},
-		confirm: map[string]bool{
-			"database.export_all_users": true,
-		},
+// NewPermissionEngineFromFile loads Cedar policies from a .cedar file.
+func NewPermissionEngineFromFile(path string) (*PermissionEngine, error) {
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read cedar policy: %w", err)
 	}
+	return NewPermissionEngineFromString(string(src))
 }
 
-func (p *PermissionEngine) Name() string          { return "permission.cedar-stub" }
+// NewPermissionEngineFromString loads Cedar policies from a policy string.
+func NewPermissionEngineFromString(policyText string) (*PermissionEngine, error) {
+	ps, err := cedar.NewPolicySetFromBytes("permission.cedar", []byte(policyText))
+	if err != nil {
+		return nil, fmt.Errorf("parse cedar policies: %w", err)
+	}
+	return &PermissionEngine{policySet: ps}, nil
+}
+
+func (p *PermissionEngine) Name() string           { return "permission.cedar" }
 func (p *PermissionEngine) Axis() api.Axis         { return api.AxisPermission }
 func (p *PermissionEngine) FailMode() api.FailMode { return api.FailClosed }
 
-func (p *PermissionEngine) EvaluatePre(_ context.Context, c *api.ToolCall) (*api.Signal, error) {
-	// Rule 1: role-based forbid.
-	for _, denied := range p.denyForRole[c.Principal.Role] {
-		if strings.EqualFold(denied, c.ToolID) {
-			return &api.Signal{
-				Axis:     api.AxisPermission,
-				Engine:   p.Name(),
-				Score:    90,
-				Verdict:  api.VerdictBlock,
-				Reasons:  []string{"role '" + c.Principal.Role + "' forbidden to call " + c.ToolID},
-				Evidence: []api.Evidence{{Kind: "policy_match", Detail: "forbid(" + c.Principal.Role + ", " + c.ToolID + ")"}},
-				FailMode: api.FailClosed,
-			}, nil
-		}
+// authorize runs one Cedar decision for the given action verb.
+func (p *PermissionEngine) authorize(action string, c *api.ToolCall) (bool, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	principalUID := cedar.NewEntityUID("Client", cedar.String(c.Principal.AgentID))
+	resourceUID := cedar.NewEntityUID("Tool", cedar.String(c.ToolID))
+
+	// Principal entity carries the role attribute so `principal.role` works.
+	principal := cedar.Entity{
+		UID:        principalUID,
+		Parents:    cedar.NewEntityUIDSet(),
+		Attributes: cedar.NewRecord(cedar.RecordMap{"role": cedar.String(c.Principal.Role)}),
+		Tags:       cedar.NewRecord(cedar.RecordMap{}),
 	}
-	// Rule 2: sensitive operation requires confirmation.
-	if p.confirm[c.ToolID] {
+	entities := cedar.EntityMap{principalUID: principal}
+
+	req := cedar.Request{
+		Principal: principalUID,
+		Action:    cedar.NewEntityUID("Action", cedar.String(action)),
+		Resource:  resourceUID,
+		Context:   cedar.NewRecord(cedar.RecordMap{}),
+	}
+
+	decision, diag := cedar.Authorize(p.policySet, entities, req)
+	if len(diag.Errors) > 0 {
+		return false, fmt.Errorf("cedar diagnostic: %v", diag.Errors)
+	}
+	return decision == cedar.Allow, nil
+}
+
+func (p *PermissionEngine) EvaluatePre(_ context.Context, c *api.ToolCall) (*api.Signal, error) {
+	// 1) May the tool run at all?
+	allowed, err := p.authorize("call_tool", c)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return &api.Signal{
+			Axis:     api.AxisPermission,
+			Engine:   p.Name(),
+			Score:    90,
+			Verdict:  api.VerdictBlock,
+			Reasons:  []string{fmt.Sprintf("cedar denied call_tool on %s for role=%s", c.ToolID, c.Principal.Role)},
+			Evidence: []api.Evidence{{Kind: "policy_match", Detail: "forbid call_tool " + c.ToolID}},
+			FailMode: api.FailClosed,
+		}, nil
+	}
+
+	// 2) May it run WITHOUT human approval?
+	auto, err := p.authorize("auto_execute", c)
+	if err != nil {
+		return nil, err
+	}
+	if !auto {
 		return &api.Signal{
 			Axis:     api.AxisPermission,
 			Engine:   p.Name(),
 			Score:    60,
 			Verdict:  api.VerdictConfirm,
-			Reasons:  []string{c.ToolID + " is sensitive and requires human approval"},
+			Reasons:  []string{fmt.Sprintf("%s is executable but not auto-executable — human approval required", c.ToolID)},
+			Evidence: []api.Evidence{{Kind: "policy_match", Detail: "forbid auto_execute " + c.ToolID}},
 			FailMode: api.FailClosed,
 		}, nil
 	}
-	// Default allow (this engine has no opinion).
-	return &api.Signal{
-		Axis:    api.AxisPermission,
-		Engine:  p.Name(),
-		Score:   0,
-		Verdict: api.VerdictAllow,
-	}, nil
+
+	return &api.Signal{Axis: api.AxisPermission, Engine: p.Name(), Score: 0, Verdict: api.VerdictAllow}, nil
 }
 
 func (p *PermissionEngine) EvaluateRuntime(_ context.Context, _ *api.ToolCall, _ Stream) (*api.Signal, error) {
-	return nil, nil // permission axis has no runtime hook in the MVP
+	return nil, nil
 }
 
 func (p *PermissionEngine) EvaluatePost(_ context.Context, _ *api.ToolCall, _ *api.ToolResult) (*api.Signal, error) {
-	// Phase 1 target: verify result did not exceed authorized scope.
 	return nil, nil
 }

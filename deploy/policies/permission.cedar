@@ -1,20 +1,26 @@
-// Permission-axis policies (Cedar). Loaded and hot-reloaded by the Gateway.
-// This is illustrative; the MVP permission engine currently hard-codes the same
-// rules in Go (internal/engine/permission.go) and will migrate to Cedar in Phase 1.
+// Permission-axis policies (Cedar) — evaluated by cedar-go v1.8.0, the same engine
+// ToolHive uses (pkg/authz/authorizers/cedar). Entity/request shape mirrors
+// ToolHive: principal Client::"<agent>", action Action::"call_tool"|"auto_execute",
+// resource Tool::"<tool_id>", principal.role attribute drives RBAC.
+//
+// Two actions implement Bifrost's execute-vs-auto-execute split:
+//   call_tool     — may the tool run at all?      (deny => BLOCK)
+//   auto_execute  — may it run WITHOUT approval?   (deny => CONFIRM / human-in-the-loop)
 
-// Employees may not delete users.
+// Baseline: allow by default (Cedar is deny-by-default, so we need an explicit permit).
+permit (principal, action, resource);
+
+// Employees may not delete users — hard BLOCK.
 forbid (
   principal,
-  action == Action::"database.delete_user",
-  resource
+  action == Action::"call_tool",
+  resource == Tool::"database.delete_user"
 )
-when { principal has role && principal.role == "employee" };
+when { principal.role == "employee" };
 
-// Exporting all users is sensitive: require human confirmation.
-// (Confirmation is expressed as an obligation/annotation the Gateway maps to CONFIRM.)
-permit (
+// Exporting all users is executable but NOT auto-executable => requires human CONFIRM.
+forbid (
   principal,
-  action == Action::"database.export_all_users",
-  resource
-)
-advice { "require_confirmation" };
+  action == Action::"auto_execute",
+  resource == Tool::"database.export_all_users"
+);

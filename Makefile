@@ -1,12 +1,21 @@
-.PHONY: build run tidy fmt test
+.PHONY: build run demo tidy fmt test sidecar
 
-# Build the gateway data-plane binary.
+# Build all Go packages.
 build:
-	go build -o bin/gateway ./cmd/gateway
+	go build ./...
 
-# Run the self-contained MVP demo (docs/MVP.md).
+# Run the gateway demo (behavior axis needs the sidecar; use `make demo` for both).
 run:
 	go run ./cmd/gateway
+
+# Full MVP demo: starts the Invariant sidecar, runs all three axes, stops sidecar.
+demo:
+	./scripts/demo.sh
+
+# Start only the Invariant behavior sidecar (foreground).
+sidecar:
+	LOCAL_POLICY=1 intelligence/.venv/bin/python intelligence/analyzer/sidecar.py \
+		--policy intelligence/analyzer/policy.iv --port 8900
 
 tidy:
 	go mod tidy
