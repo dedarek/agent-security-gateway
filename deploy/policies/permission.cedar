@@ -11,10 +11,19 @@
 permit (principal, action, resource);
 
 // Employees may not delete users — hard BLOCK.
+// Rules exist per namespace: "database.*" is the demo/batch naming,
+// "gw.*" is what the live MCP ingress publishes.
 forbid (
   principal,
   action == Action::"call_tool",
   resource == Tool::"database.delete_user"
+)
+when { principal.role == "employee" };
+
+forbid (
+  principal,
+  action == Action::"call_tool",
+  resource == Tool::"gw.delete_user"
 )
 when { principal.role == "employee" };
 
@@ -23,4 +32,10 @@ forbid (
   principal,
   action == Action::"auto_execute",
   resource == Tool::"database.export_all_users"
+);
+
+forbid (
+  principal,
+  action == Action::"auto_execute",
+  resource == Tool::"gw.export_all_users"
 );

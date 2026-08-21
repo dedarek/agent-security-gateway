@@ -1,14 +1,19 @@
-// Command gateway is the Agent Security Gateway data-plane entrypoint + a
-// self-contained MVP demo. It is now a REAL MCP proxy: it speaks the MCP wire
-// protocol (JSON-RPC over stdio) to a separate upstream MCP server process
-// (cmd/upstream-mcp), and runs every tool call through the three-axis engine:
+// Command gateway is the Agent Security Gateway entrypoint.
 //
-//	permission axis  -> cedar-go v1.8.0 (ToolHive engine + model)
-//	data/network axis -> real Pipelock community rule bundle
-//	behavior axis     -> real content-based taint propagation (self-built)
+// Modes:
+//
+//	gateway serve [-config deploy/config.dev.yaml]   — run as a real MCP server
+//	                                                    on HTTP (/mcp); agents connect
+//	                                                    with a standard MCP client.
+//	gateway demo                                     — self-contained five-scenario
+//	                                                    demo (offline, no agent needed).
+//
+// Every tool call — demo or live — runs the three-axis engine:
+//
+//	permission axis   -> cedar-go v1.8.0 (ToolHive engine + model)
+//	data/network axis -> real Pipelock community rule bundle (signature-verified)
+//	behavior axis     -> content-based taint propagation (+ optional Invariant sidecar)
 //	audit             -> Pipelock-style Ed25519 hash-chained action-receipts
-//
-// See docs/MVP.md.
 package main
 
 import (
@@ -16,6 +21,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"flag"
+	"fmt"
 	"log"
 	"os"
 	"time"
@@ -24,9 +31,11 @@ import (
 	"github.com/dedarek/agent-security-gateway/internal/audit"
 	"github.com/dedarek/agent-security-gateway/internal/config"
 	"github.com/dedarek/agent-security-gateway/internal/engine"
+	"github.com/dedarek/agent-security-gateway/internal/ingress"
 	"github.com/dedarek/agent-security-gateway/internal/mcpproxy"
 	"github.com/dedarek/agent-security-gateway/internal/proxy"
 	"github.com/dedarek/agent-security-gateway/internal/receipt"
+	"github.com/dedarek/agent-security-gateway/internal/rulesbundle"
 	"github.com/dedarek/agent-security-gateway/internal/session"
 )
 
@@ -38,12 +47,111 @@ func (autoApprover) Confirm(_ context.Context, c *api.ToolCall, _ api.Decision) 
 }
 
 func main() {
-	cfg := config.Default()
 	log.SetFlags(0)
-	log.Printf("=== Agent Security Gateway (MVP) ===")
+	if len(os.Args) > 1 && os.Args[1] == "serve" {
+		serveCmd(os.Args[2:])
+		return
+	}
+	demoCmd()
+}
+
+func loadConfig(path string) config.Config {
+	if path == "" {
+		return config.Default()
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	log.Printf("[config] loaded %s", path)
+	return cfg
+}
+
+func serveCmd(args []string) {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	cfgPath := fs.String("config", "deploy/config.dev.yaml", "path to YAML config")
+	fs.Parse(args)
+
+	cfg := loadConfig(*cfgPath)
+	rulesbundle.SetExtraTrustedKeys(cfg.ExtraTrustedKeysHex)
+
 	ctx := context.Background()
 
-	// --- Real upstream MCP server over the MCP wire protocol ---
+	perm, err := engine.NewPermissionEngineFromFile(cfg.CedarPolicyPath)
+	if err != nil {
+		log.Fatalf("permission engine: %v", err)
+	}
+	dn, err := engine.NewDataNetworkEngineFromFile(cfg.RulesPath, cfg.IncludeExperimentalRules)
+	if err != nil {
+		log.Fatalf("datanetwork engine: %v", err)
+	}
+
+	store := session.NewStore()
+	taint := engine.NewTaintEngine(store, cfg.TaintSources, cfg.TaintSinks, api.FailClosed)
+
+	reg := engine.NewRegistry()
+	reg.Register(perm)
+	reg.Register(dn)
+	reg.Register(taint)
+	registerBehaviorSidecar(reg, store, cfg)
+
+	emitter, err := receipt.NewEmitter()
+	if err != nil {
+		log.Fatalf("receipt emitter: %v", err)
+	}
+	gw := &proxy.Gateway{
+		Registry:   reg,
+		Approver:   autoApprover{},
+		Forwarder:  &liveForwarder{up: dialForServe(ctx, cfg)},
+		Audit:      audit.StdoutSink{},
+		Sessions:   store,
+		Receipts:   emitter,
+		Observers:  []proxy.ResultObserver{taint},
+		PolicyHash: policyHash(cfg.CedarPolicyPath, cfg.RulesPath),
+	}
+	log.Printf("[gateway] engines ready; policy hash %s", gw.PolicyHash)
+	if err := ingress.Serve(ctx, cfg.Listen, gw, cfg.UpstreamCommand); err != nil {
+		log.Fatalf("ingress: %v", err)
+	}
+}
+
+func dialForServe(ctx context.Context, cfg config.Config) *mcpproxy.Upstream {
+	up, err := mcpproxy.Dial(ctx, cfg.UpstreamCommand)
+	if err != nil {
+		log.Fatalf("dial upstream MCP: %v (build it first: go build -o bin/upstream-mcp ./cmd/upstream-mcp)", err)
+	}
+	return up
+}
+
+// registerBehaviorSidecar wires the optional Invariant analyzer engine.
+func registerBehaviorSidecar(reg *engine.Registry, store *session.Store, cfg config.Config) {
+	if cfg.BehaviorSidecarURL == "" {
+		return
+	}
+	failMode := api.FailClosed
+	if cfg.BehaviorFailOpen {
+		failMode = api.FailOpen
+	}
+	reg.Register(engine.NewBehaviorEngine(cfg.BehaviorSidecarURL, store, failMode))
+	log.Printf("[axis C+] behavior.invariant sidecar at %s (failMode=%v)", cfg.BehaviorSidecarURL, failMode)
+}
+
+// liveForwarder adapts the long-lived upstream connection for proxy.Forwarder.
+type liveForwarder struct {
+	up *mcpproxy.Upstream
+}
+
+func (f *liveForwarder) Forward(ctx context.Context, c *api.ToolCall) (*api.ToolResult, error) {
+	return f.up.Forward(ctx, c)
+}
+
+var _ = fmt.Sprintf // keep fmt for future use
+
+func demoCmd() {
+	cfg := config.Default()
+	log.Printf("=== Agent Security Gateway (MVP demo) ===")
+	ctx := context.Background()
+
 	up, err := mcpproxy.Dial(ctx, cfg.UpstreamCommand)
 	if err != nil {
 		log.Fatalf("dial upstream MCP: %v (build it first: go build -o bin/upstream-mcp ./cmd/upstream-mcp)", err)
@@ -55,21 +163,18 @@ func main() {
 	}
 	log.Printf("[proxy] connected to upstream MCP server; tools/list = %v", tools)
 
-	// --- Axis A: permission (real Cedar) ---
 	perm, err := engine.NewPermissionEngineFromFile(cfg.CedarPolicyPath)
 	if err != nil {
 		log.Fatalf("permission engine: %v", err)
 	}
 	log.Printf("[axis A] permission: cedar-go loaded %s", cfg.CedarPolicyPath)
 
-	// --- Axis B: data/network (real Pipelock rules) ---
 	dn, err := engine.NewDataNetworkEngineFromFile(cfg.RulesPath, cfg.IncludeExperimentalRules)
 	if err != nil {
 		log.Fatalf("datanetwork engine: %v", err)
 	}
 	log.Printf("[axis B] data/network: %s", dn.Name())
 
-	// --- Axis C: behavior (real content-based taint) ---
 	store := session.NewStore()
 	taint := engine.NewTaintEngine(store, cfg.TaintSources, cfg.TaintSinks, api.FailClosed)
 	log.Printf("[axis C] behavior: content-based taint (sources=%v sinks=%v)", cfg.TaintSources, cfg.TaintSinks)

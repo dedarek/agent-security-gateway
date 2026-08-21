@@ -1,14 +1,23 @@
+# Agent Security Gateway — development configuration.
+# Every field is optional; missing fields keep their defaults (see
+# internal/config/config.go Default()).
+
 listen: ":8080"
-upstream: "http://127.0.0.1:9000"   # real MCP server behind the gateway
-policy:
-  cedar_path: "./deploy/policies"
-engines:
-  - name: "permission.cedar-stub"
-    enabled: true
-  # - name: "datanetwork.pipelock"   # Phase 2
-  #   enabled: false
-  # - name: "behavior.invariant"     # Phase 3
-  #   enabled: false
-audit:
-  dsn: ""      # empty => stdout sink (MVP)
-  topic: ""    # empty => no event-bus publish
+
+# Real upstream MCP server the gateway proxies to (argv, spawned over stdio).
+upstream_command: ["./bin/upstream-mcp"]
+
+cedar_policy_path: "./deploy/policies/permission.cedar"
+rules_path: "./deploy/rules/pipelock-community.yaml"
+
+# Behavior/causal axis: content-based taint sources and egress sinks
+# (unqualified tool names).
+taint_sources: ["get_inbox", "read_secret", "fetch", "read_file"]
+taint_sinks:   ["send_email", "http_post", "export_all_users"]
+
+include_experimental_rules: false
+# extra_trusted_keys_hex: ""   # optional third-party rule signers
+
+# Behavior sidecar (Invariant analyzer). Empty => engine disabled.
+behavior_sidecar_url: ""
+behavior_fail_open: true

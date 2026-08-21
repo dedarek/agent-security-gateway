@@ -1,17 +1,33 @@
 package config
 
-// Config is the Gateway runtime configuration.
+import (
+	"fmt"
+	"os"
+
+	"gopkg.in/yaml.v3"
+)
+
+// Config is the Gateway runtime configuration. It can be built programmatically
+// (Default) or loaded from a YAML file (Load).
 type Config struct {
-	Listen          string
-	CedarPolicyPath string   // permission axis (ToolHive/Cedar)
-	RulesPath       string   // data/network axis (Pipelock rule bundle)
-	UpstreamCommand []string // real upstream MCP server process (argv)
+	Listen          string   `yaml:"listen"`
+	CedarPolicyPath string   `yaml:"cedar_policy_path"`
+	RulesPath       string   `yaml:"rules_path"`
+	UpstreamCommand []string `yaml:"upstream_command"`
 
-	// Behavior/causal axis (real content-based taint).
-	TaintSources []string // tool names whose output is untrusted
-	TaintSinks   []string // tool names that egress data
+	// Behavior/causal axis (content-based taint): tool names whose output is
+	// untrusted, and tool names that egress data.
+	TaintSources []string `yaml:"taint_sources"`
+	TaintSinks   []string `yaml:"taint_sinks"`
 
-	IncludeExperimentalRules bool
+	// Pipelock rule bundles: experimental rules off by default; extra trusted
+	// third-party signing keys (comma-separated hex Ed25519 public keys).
+	IncludeExperimentalRules bool   `yaml:"include_experimental_rules"`
+	ExtraTrustedKeysHex      string `yaml:"extra_trusted_keys_hex"`
+
+	// Behavior sidecar (Invariant analyzer). Empty => engine disabled.
+	BehaviorSidecarURL string `yaml:"behavior_sidecar_url"`
+	BehaviorFailOpen   bool   `yaml:"behavior_fail_open"`
 }
 
 // Default returns config for the MVP demo (paths relative to repo root).
@@ -25,4 +41,18 @@ func Default() Config {
 		TaintSinks:               []string{"send_email", "http_post", "export_all_users"},
 		IncludeExperimentalRules: false,
 	}
+}
+
+// Load reads a YAML config file over the defaults (missing fields keep their
+// default values), so a minimal config file only overrides what it states.
+func Load(path string) (Config, error) {
+	cfg := Default()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return cfg, fmt.Errorf("read config: %w", err)
+	}
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		return cfg, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	return cfg, nil
 }
