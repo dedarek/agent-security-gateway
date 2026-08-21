@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/dedarek/agent-security-gateway/api"
@@ -67,6 +69,13 @@ func (g *Gateway) Handle(ctx context.Context, c *api.ToolCall) (*api.ToolResult,
 			return nil, pre, nil
 		}
 	}
+	// REDACT before forwarding: scrub sensitive values out of the arguments so
+	// they never reach the upstream tool (e.g. a local secret flowing into an
+	// external HTTP tool). The decision keeps the original rationale; the call
+	// proceeds with sanitized bytes.
+	if pre.Final == api.VerdictRedact {
+		c.Arguments = applyRedactions(c.Arguments, collectRedactions(pre.Signals))
+	}
 
 	// Record the (approved) call into the session trajectory for the behavior axis.
 	if g.Sessions != nil {
@@ -91,6 +100,14 @@ func (g *Gateway) Handle(ctx context.Context, c *api.ToolCall) (*api.ToolResult,
 	// ---- POST ----
 	post := g.Registry.EvaluatePost(ctx, c, res)
 
+	// REDACT after execution: scrub sensitive values out of the result BEFORE
+	// it is returned to the agent or written to the audit sink. (The session
+	// trajectory and taint observers above intentionally saw the raw bytes:
+	// detection engines need true content; the agent-facing boundary does not.)
+	if post.Final == api.VerdictRedact && res != nil {
+		res.Output = applyRedactions(res.Output, collectRedactions(post.Signals))
+	}
+
 	// Effective decision = most severe across pre and post.
 	eff := moreSevere(pre, post)
 	if eff.Final == api.VerdictBlock {
@@ -99,6 +116,37 @@ func (g *Gateway) Handle(ctx context.Context, c *api.ToolCall) (*api.ToolResult,
 	}
 	g.record(c, res, eff)
 	return res, eff, nil
+}
+
+// collectRedactions gathers the concrete scrub operations from all REDACT
+// signals of a decision.
+func collectRedactions(signals []api.Signal) []api.Redaction {
+	var out []api.Redaction
+	for _, s := range signals {
+		out = append(out, s.Redactions...)
+	}
+	return out
+}
+
+// applyRedactions rewrites bytes: every literal Match is replaced with its
+// Replace value. This is what makes a REDACT verdict real — the caller gets
+// sanitized data, not a promise. Longest matches are applied first so that
+// overlapping hits (e.g. a full URL and a host inside it) scrub completely.
+func applyRedactions(data []byte, redactions []api.Redaction) []byte {
+	if len(redactions) == 0 || len(data) == 0 {
+		return data
+	}
+	out := string(data)
+	rs := make([]api.Redaction, len(redactions))
+	copy(rs, redactions)
+	sort.Slice(rs, func(i, j int) bool { return len(rs[i].Match) > len(rs[j].Match) })
+	for _, r := range rs {
+		if r.Match == "" {
+			continue // Path-based field scrubbing is future work; never no-op the whole payload
+		}
+		out = strings.ReplaceAll(out, r.Match, r.Replace)
+	}
+	return []byte(out)
 }
 
 // moreSevere returns the decision with the higher verdict (Allow<Redact<Confirm<Block),

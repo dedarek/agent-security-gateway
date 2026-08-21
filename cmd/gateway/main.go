@@ -153,12 +153,19 @@ func demo(ctx context.Context, gw *proxy.Gateway, emitter *receipt.Emitter) {
 
 func run(ctx context.Context, gw *proxy.Gateway, c api.ToolCall) api.Decision {
 	c.Timestamp = time.Now()
-	_, d, err := gw.Handle(ctx, &c)
+	res, d, err := gw.Handle(ctx, &c)
 	if err != nil {
 		log.Printf("  %-28s => ERROR %v", c.ToolID, err)
 		return d
 	}
 	log.Printf("  %-28s => %-7s  %s", c.ToolID, d.Final, d.Rationale)
+	if res != nil && len(res.Output) > 0 {
+		preview := string(res.Output)
+		if len(preview) > 100 {
+			preview = preview[:100] + "..."
+		}
+		log.Printf("    agent sees: %s", preview)
+	}
 	return d
 }
 

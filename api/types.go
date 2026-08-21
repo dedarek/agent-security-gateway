@@ -121,9 +121,18 @@ type Evidence struct {
 	Detail string
 }
 
-// Redaction describes a field to scrub when the verdict is REDACT.
+// Redaction describes a scrub to apply before data crosses the boundary.
+// Two flavors are supported today:
+//   - Match != ""  -> replace every literal occurrence of Match with Replace
+//     (used by regex-based DLP engines scanning raw payloads).
+//   - Path != ""   -> future field-level scrubbing (JSON path into the payload).
+//
+// The Gateway MUST apply every redaction to arguments (before forwarding) and
+// to results (before returning them to the agent / writing trajectories);
+// emitting a REDACT verdict without rewriting bytes is a security bug.
 type Redaction struct {
-	Path    string // JSON path into arguments/output
+	Path    string // JSON path into arguments/output ("*" = whole payload)
+	Match   string // exact substring to scrub (literal replace)
 	Reason  string
 	Replace string // e.g. "***"
 }

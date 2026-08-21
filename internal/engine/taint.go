@@ -128,10 +128,12 @@ func (t *TaintEngine) EvaluatePost(_ context.Context, _ *api.ToolCall, _ *api.To
 }
 
 // tokenFlow reports whether value v matches a high-signal token (email/URL/host)
-// from taint mark m, returning the matching token.
+// from taint mark m, returning the matching token. Short or generic values are
+// rejected to avoid false positives: a tiny argument like "com" must not match
+// every host token that happens to contain it.
 func tokenFlow(v string, m session.TaintMark) (string, bool) {
 	lv := strings.ToLower(strings.TrimSpace(v))
-	if lv == "" {
+	if len(lv) < minTokenLen {
 		return "", false
 	}
 	for _, tok := range m.Tokens {
@@ -145,6 +147,10 @@ func tokenFlow(v string, m session.TaintMark) (string, bool) {
 	}
 	return "", false
 }
+
+// minTokenLen is the shortest value eligible for token-flow matching. Real
+// emails/URLs/hosts are longer; anything shorter is noise (e.g. "com", "io").
+const minTokenLen = 6
 
 // extractTokens pulls high-signal identifiers (emails, URLs, hostnames) from text.
 func extractTokens(text string) []string {

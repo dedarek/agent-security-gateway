@@ -3,13 +3,13 @@ package engine
 import (
 	"context"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/dedarek/agent-security-gateway/api"
+	"github.com/dedarek/agent-security-gateway/internal/rulesbundle"
 )
 
 // DataNetworkEngine is the data/network axis (Pipelock class). It loads the REAL
@@ -62,11 +62,15 @@ type bundle struct {
 	} `yaml:"rules"`
 }
 
-// NewDataNetworkEngineFromFile loads a Pipelock rule bundle from disk.
+// NewDataNetworkEngineFromFile loads a Pipelock rule bundle from disk. The
+// bundle's detached Ed25519 signature (<path>.sig) is verified against the
+// embedded official Pipelock keyring BEFORE parsing (fail-closed: a missing,
+// malformed, or untrusted signature aborts the load), and the verified bytes —
+// not a re-read of the file — are the ones parsed.
 func NewDataNetworkEngineFromFile(path string, includeExperimental bool) (*DataNetworkEngine, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := rulesbundle.LoadVerified(path)
 	if err != nil {
-		return nil, fmt.Errorf("read rule bundle: %w", err)
+		return nil, err
 	}
 	var b bundle
 	if err := yaml.Unmarshal(raw, &b); err != nil {
@@ -114,6 +118,18 @@ func scan(rules []compiledRule, text string) (compiledRule, bool) {
 	return compiledRule{}, false
 }
 
+// scanWithHits returns the first matching rule together with the exact matched
+// substrings, so the caller can emit concrete Redactions (literal Match values)
+// instead of a vague whole-payload marker.
+func scanWithHits(rules []compiledRule, text string) (compiledRule, []string, bool) {
+	for _, r := range rules {
+		if hits := r.Re.FindAllString(text, -1); len(hits) > 0 {
+			return r, hits, true
+		}
+	}
+	return compiledRule{}, nil, false
+}
+
 func (e *DataNetworkEngine) EvaluatePre(_ context.Context, c *api.ToolCall) (*api.Signal, error) {
 	// tool-poison: scan the tool identifier/name.
 	for _, r := range e.toolPoison {
@@ -126,9 +142,9 @@ func (e *DataNetworkEngine) EvaluatePre(_ context.Context, c *api.ToolCall) (*ap
 	if r, ok := scan(e.injection, args); ok {
 		return block(e, "injection", r, "prompt-injection pattern in tool arguments"), nil
 	}
-	// dlp in arguments (outbound secret) -> REDACT (critical) else flag.
-	if r, ok := scan(e.dlp, args); ok {
-		return redactOrBlock(e, r, "sensitive data in tool arguments"), nil
+	// dlp in arguments (outbound secret) -> REDACT with concrete matches.
+	if r, hits, ok := scanWithHits(e.dlp, args); ok {
+		return redactOrBlock(e, r, hits, "sensitive data in tool arguments"), nil
 	}
 	return &api.Signal{Axis: api.AxisDataNetwork, Engine: e.Name(), Verdict: api.VerdictAllow}, nil
 }
@@ -145,8 +161,8 @@ func (e *DataNetworkEngine) EvaluatePost(_ context.Context, _ *api.ToolCall, r *
 	if rule, ok := scan(e.injection, out); ok {
 		return block(e, "injection", rule, "prompt-injection pattern in tool result"), nil
 	}
-	if rule, ok := scan(e.dlp, out); ok {
-		return redactOrBlock(e, rule, "sensitive data in tool result"), nil
+	if rule, hits, ok := scanWithHits(e.dlp, out); ok {
+		return redactOrBlock(e, rule, hits, "sensitive data in tool result"), nil
 	}
 	return &api.Signal{Axis: api.AxisDataNetwork, Engine: e.Name(), Verdict: api.VerdictAllow}, nil
 }
@@ -163,10 +179,19 @@ func block(e *DataNetworkEngine, kind string, r compiledRule, reason string) *ap
 	}
 }
 
-func redactOrBlock(e *DataNetworkEngine, r compiledRule, reason string) *api.Signal {
+func redactOrBlock(e *DataNetworkEngine, r compiledRule, hits []string, reason string) *api.Signal {
 	v := api.VerdictRedact
 	if r.Severity == "critical" {
 		v = api.VerdictRedact // scrub critical secrets rather than hard-block, keep usability
+	}
+	redactions := make([]api.Redaction, 0, len(hits))
+	for _, h := range hits {
+		redactions = append(redactions, api.Redaction{
+			Path:    "*",
+			Match:   h,
+			Reason:  r.Name,
+			Replace: "***",
+		})
 	}
 	return &api.Signal{
 		Axis:       api.AxisDataNetwork,
@@ -175,7 +200,7 @@ func redactOrBlock(e *DataNetworkEngine, r compiledRule, reason string) *api.Sig
 		Verdict:    v,
 		Reasons:    []string{reason + " [" + r.Name + "]"},
 		Evidence:   []api.Evidence{{Kind: "dlp", Detail: r.ID + " (" + r.Severity + ")"}},
-		Redactions: []api.Redaction{{Path: "*", Reason: r.Name, Replace: "***"}},
+		Redactions: redactions,
 		FailMode:   api.FailClosed,
 	}
 }
