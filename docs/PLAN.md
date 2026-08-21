@@ -21,6 +21,10 @@
 产品不是 `ToolHive + Pipelock + Invariant` 的拼装，而是：**我们掌握 Gateway 主干，
 三个开源项目的能力做成可插拔 Engine/Adapter**。架构不绑死在任一开源项目上。
 
+> 四项目源码已实测，各 Phase 的采纳决策见下方标注；完整实测见
+> [`BASE-PROJECTS-ANALYSIS.md`](BASE-PROJECTS-ANALYSIS.md)，选型结论见
+> [`OPEN-SOURCE-ANALYSIS.md`](OPEN-SOURCE-ANALYSIS.md)。
+
 ---
 
 ## 1. 核心设计原则（贯穿所有阶段）
@@ -55,6 +59,7 @@
 type Engine interface {
     Name() string
     Axis() Axis // Permission | DataNetwork | Behavior
+    FailMode() FailMode // 安全默认 FailClosed（对 Bifrost「error 非阻断」的反转）
     // 三个钩子，Engine 可只实现关心的阶段
     EvaluatePre(ctx, *ToolCall)  (*Signal, error)
     EvaluateRuntime(ctx, *ToolCall, *Stream) (*Signal, error)
@@ -62,6 +67,8 @@ type Engine interface {
 }
 ```
 `Signal` = { score 0–100, verdict, reasons[], evidence[], failMode }。
+> 契约借鉴 Bifrost `core/schemas/plugin.go`（能力拆分 + Pre/Post 对称 executed-count +
+> 类型化短路），但**反转为 fail-closed**：Engine 返回 error ⇒ 按 FailMode 处理（高敏默认 BLOCK）。
 
 ### Step 0.4 可编译骨架
 - `cmd/gateway` 能启动、加载配置、注册 Engine、跑一个 passthrough 代理（不做任何拦截）。
@@ -81,8 +88,12 @@ type Engine interface {
 - 工具/资源建模：`tool_id`、`resource`（如 `database.users`）、`action`（read/write/delete）。
 
 ### Step 1.2 权限轴 Engine（ToolHive 类）
-- 策略引擎选 **Cedar**（AWS 开源，专为授权设计，可读性强）或 **OPA/Rego**。
-  - 推荐 Cedar：策略即代码，`principal / action / resource / context` 模型天然贴合。
+- **实测采纳**：vendor ToolHive `pkg/authz/authorizers` 的 `Authorizer` + `AuthorizerFactory`
+  接口（近零耦合，仅依赖 context/json），复用其 Cedar 后端 `authorizers/cedar`。
+- 策略引擎 = **Cedar**（ToolHive 已用 `cedar-policy/cedar-go`，`forbid` 优先于 `permit`，默认拒绝，
+  RBAC 经 `THVGroup`）。想脱 `pkg/auth` 就 fork `cedar/core.go`，用纯原语 `IsAuthorized(...)`。
+- **enforcement 形态照抄 `vmcp/core.Admission`**：一个授权器同时驱动 `FilterTools`(list 过滤) +
+  `AllowToolCall`(call 拒绝)，而非整块搬较重的 `pkg/authz` HTTP 中间件（耦合 vmcp optimizer）。
 - 策略示例：
   ```
   // 普通员工 agent 禁止删除用户
@@ -94,9 +105,14 @@ type Engine interface {
 ### Step 1.3 决策引擎骨架
 - `Risk Decision Engine` 汇总（此阶段只有权限轴一条）：`ALLOW / BLOCK / CONFIRM`。
 - `CONFIRM` 分支：把调用挂起，推送到审批队列，等待人工 `approve/deny`（Slack/飞书/Web）。
+  > 审批原语借鉴 Bifrost 的 **execute-vs-auto-execute** 拆分：工具「可执行但不自动执行」
+  > 即映射为 `CONFIRM`——把 tool call 交回人工确认后再放行。
 
 ### Step 1.4 事件沉淀
 - 每次 decision 产出结构化 `Event`，写入事件总线（NATS）+ 持久化（Postgres / ClickHouse）。
+- **审计原语采纳 Pipelock action-receipt**：每个决策额外发射 Ed25519 签名、哈希链的 receipt
+  （`internal/receipt` 设计，含 4 语言验证器 + 一致性语料），作为不可篡改取证。Event schema
+  同时对齐 ToolHive `pkg/audit`（含 RFC 8693 delegation 链）。
 
 ### Step 1.5 最小分析闭环
 - SOC 侧先做最简单的：把事件按 session 聚合成「轨迹」，Web 上能看到一条 Agent 行为时间线。
@@ -119,14 +135,20 @@ type Engine interface {
   - **Forward Proxy 模式**：Agent 的所有出网 HTTP(S) 走 Gateway 代理，MITM 检查（需信任 CA）。
   - **MCP 内联模式**：对 MCP 工具的参数/返回内容做检查（无需 MITM）。
 - 运行时轴：`EvaluateRuntime` 在流式返回时逐块检查。
+  > **实测采纳**：Pipelock 代理层（`internal/proxy`/`internal/mcp`）深耦合其 session/taint/envelope
+  > 子系统 → **以 sidecar 运行 Pipelock 作数据/网络轴 egress engine**，我方 Engine 经其接口对接，
+  > 不 vendoring 这两个包。
 
 ### Step 2.2 检测能力（数据/网络轴 Engine）
 - **SSRF / 恶意域名**：目标 URL 解析，内网地址、云 metadata（169.254.169.254）、
-  domain allow/deny list、newly-seen-domain 风险打分。
+  domain allow/deny list、newly-seen-domain 风险打分。（Pipelock `ssrf_dial_block.go` 有 DNS
+  rebind 检测可复用）
 - **DLP / Secret 外泄**：正则 + 熵检测（AWS key / 私钥 / token / PII），
   参数出方向 & 返回入方向双向扫描。
 - **Tool Poisoning**：MCP 工具描述/返回里注入的隐藏指令检测。
 - **REDACT 决策**：不一定 BLOCK，可对敏感字段脱敏后放行。
+- **规则格式采纳 Pipelock 签名 YAML bundle**（RE2 正则 + confidence 分级 + Ed25519 分离签名 +
+  只增不覆盖 built-in），并直接引入 `pipelock-rules` 社区语料（DLP/injection/tool-poison/PHI）。
 
 ### Step 2.3 决策引擎升级为多轴汇总
 - 权限轴 + 数据网络轴并行评估，汇总策略（见 ARCHITECTURE.md §5 汇总算法）。
@@ -148,16 +170,24 @@ type Engine interface {
 - 为每个 session 维护 **数据来源标签 (taint)**：
   哪些内容来自 untrusted 源（外部网页 / 邮件 / 第三方 MCP 返回）。
 - taint 随上下文传播：untrusted 内容影响了后续工具调用参数 → 该调用继承 untrusted 标记。
+  > **★ 必须自建（实测关键）**：Invariant 的 `Dataflow`（`input.py`）只是「事件位置可达」，
+  > **不是真污点**。真 taint 传播是因果轴严谨性所在，这一处改进而非照抄。
 
 ### Step 3.2 行为策略语言 (Guardrails)
-- 定义可表达轨迹约束的 DSL / 规则：
+- **实测采纳 Invariant DSL + 引擎作库内嵌**（`LocalPolicy`/`Monitor`，`LOCAL_POLICY=1`，Python sidecar）。
+  采纳三样：(1) DSL + parser/evaluator；(2) `->`(flow) / `~>`(parent) / `is tool:name({arg})` 轨迹原语；
+  (3) `AnalysisResult/ErrorInformation/Range` verdict 模型。
+- 招牌规则（真实语法）：
+  ```python
+  from invariant.detectors import prompt_injection
+  raise "untrusted source reaches sensitive tool" if:
+      (output: ToolOutput) -> (call2: ToolCall)
+      prompt_injection(output.content, threshold=0.7)
+      call2 is tool:send_email
   ```
-  // 来自不可信源的信息不得触发高敏工具
-  raise "indirect prompt injection" if:
-      untrusted_source -> reaches -> tool_call(sensitivity == HIGH)
-  ```
-- Pre 阶段：在调用前就用已积累的轨迹判断当前调用是否落入危险链路。
-- Post 阶段：深度复盘，还原完整攻击路径。
+- Pre：`Monitor.check(past, pending)` 在调用前用已积累轨迹判断当前调用是否落入危险链路。
+- Post：深度复盘，还原完整攻击路径。
+- 重 ML 检测器（deberta/presidio/spacy）保留 DSL 谓词接口、**实现替换为我方低延迟检测服务**。
 
 ### Step 3.3 与前两轴联动
 - 行为轴给出的信号进入同一个汇总决策：
@@ -165,6 +195,8 @@ type Engine interface {
 
 ### Step 3.4 MCP-Scan 静态扫描
 - 上线前扫描接入的 MCP Server：工具描述是否含注入、权限是否过宽、schema 是否可疑。
+  > Invariant 的 mcp-scan 已并入 `snyk/agent-scan`；可集成它或用 Invariant `semgrep`/`code`
+  > 检测器自建静态扫描。
 
 **交付物**：taint 传播、行为 Guardrails DSL、三轴联动决策、MCP-Scan。
 **验收（招牌 Demo）**：跑通 README §3 的间接注入剧本 —— 单看三个工具都合法，

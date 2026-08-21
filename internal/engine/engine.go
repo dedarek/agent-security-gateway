@@ -21,9 +21,17 @@ type Stream interface {
 // Engine is the single interface every detection capability implements. An
 // engine belongs to one Axis but may participate in any subset of phases; return
 // a nil *Signal (with nil error) for phases it does not care about.
+//
+// Design borrows Bifrost's capability-split plugin contract (core/schemas/plugin.go)
+// — but INVERTS its "plugin error is a non-blocking warning" default. Here an
+// engine declares FailMode(); on error the aggregator honors it, and security-
+// sensitive engines default to FailClosed (error => BLOCK). See
+// docs/BASE-PROJECTS-ANALYSIS.md §3.3.
 type Engine interface {
 	Name() string
 	Axis() api.Axis
+	// FailMode is how the aggregator treats an error from this engine.
+	FailMode() api.FailMode
 
 	EvaluatePre(ctx context.Context, c *api.ToolCall) (*api.Signal, error)
 	EvaluateRuntime(ctx context.Context, c *api.ToolCall, s Stream) (*api.Signal, error)
@@ -67,21 +75,24 @@ func (r *Registry) EvaluatePost(ctx context.Context, c *api.ToolCall, res *api.T
 	return Aggregate(c.CallID, api.PhasePost, signals)
 }
 
-// normalize turns an engine error into a fail-open/fail-closed signal so a
-// broken engine never silently disappears from the decision.
+// normalize turns an engine error into a signal that honors the engine's
+// declared FailMode, so a broken engine never silently disappears from the
+// decision (the mistake Bifrost makes by swallowing plugin errors as warnings).
 func normalize(e Engine, sig *api.Signal, err error) *api.Signal {
 	if err == nil {
 		return sig
 	}
-	// On error, synthesize a signal based on a conservative default.
-	// Real impl reads the engine's declared FailMode.
+	verdict := api.VerdictBlock // FailClosed default: error => BLOCK
+	if e.FailMode() == api.FailOpen {
+		verdict = api.VerdictAllow // low-sensitivity path: degrade + alert
+	}
 	return &api.Signal{
 		Axis:     e.Axis(),
 		Engine:   e.Name(),
 		Score:    100,
-		Verdict:  api.VerdictBlock, // default fail-closed; override per-engine in prod
+		Verdict:  verdict,
 		Reasons:  []string{"engine error: " + err.Error()},
-		FailMode: api.FailClosed,
+		FailMode: e.FailMode(),
 	}
 }
 

@@ -8,10 +8,13 @@ import (
 )
 
 // PermissionEngine is a stub implementation of the permission axis (ToolHive
-// class). In production, EvaluatePre delegates to a Cedar/OPA policy decision
-// point; this stub hard-codes a couple of rules so the MVP demo runs end-to-end.
+// class). In production this vendors ToolHive's near-zero-coupling
+// authorizers.Authorizer interface (pkg/authz/authorizers) and delegates to its
+// Cedar backend; enforcement follows the vmcp/core.Admission pattern (one
+// authorizer driving both list-filter and call-deny). This stub hard-codes a
+// couple of rules so the MVP demo runs end-to-end.
 //
-// See docs/PLAN.md Phase 1 and docs/MVP.md for the target behavior.
+// See docs/BASE-PROJECTS-ANALYSIS.md §1 and docs/PLAN.md Phase 1.
 type PermissionEngine struct {
 	// deny lists a tool_id that is always blocked for a given role.
 	denyForRole map[string][]string
@@ -30,8 +33,9 @@ func NewPermissionEngine() *PermissionEngine {
 	}
 }
 
-func (p *PermissionEngine) Name() string   { return "permission.cedar-stub" }
-func (p *PermissionEngine) Axis() api.Axis { return api.AxisPermission }
+func (p *PermissionEngine) Name() string          { return "permission.cedar-stub" }
+func (p *PermissionEngine) Axis() api.Axis         { return api.AxisPermission }
+func (p *PermissionEngine) FailMode() api.FailMode { return api.FailClosed }
 
 func (p *PermissionEngine) EvaluatePre(_ context.Context, c *api.ToolCall) (*api.Signal, error) {
 	// Rule 1: role-based forbid.

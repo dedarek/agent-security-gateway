@@ -181,7 +181,8 @@ Fail 处理:
 
 ## 6. Engine 插件模型
 
-所有检测能力（含 ToolHive/Pipelock/Invariant 适配器）实现统一接口，Gateway 只认接口：
+所有检测能力（含 ToolHive/Pipelock/Invariant 适配器）实现统一接口，Gateway 只认接口。
+接口设计吸收了 Bifrost 插件契约的实测经验（见 [BASE-PROJECTS-ANALYSIS.md](BASE-PROJECTS-ANALYSIS.md) §3）：
 
 ```go
 type Axis int
@@ -190,15 +191,30 @@ const ( AxisPermission Axis = iota; AxisDataNetwork; AxisBehavior )
 type Engine interface {
     Name() string
     Axis() Axis
+    // 每个 Engine 声明其失败语义；安全默认 = FailClosed
+    FailMode() FailMode
     EvaluatePre(ctx context.Context, c *ToolCall) (*Signal, error)
     EvaluateRuntime(ctx context.Context, c *ToolCall, s *Stream) (*Signal, error)
     EvaluatePost(ctx context.Context, c *ToolCall, r *ToolResult) (*Signal, error)
 }
 ```
 
+**从 Bifrost 借的三条，且已针对安全场景反转/加固：**
+
+1. **能力拆分 + 三阶段可选**：Engine 只实现关心的阶段（其余返回 nil signal）。对应
+   Bifrost 的 `LLMPlugin`/`MCPPlugin` 能力拆分。
+2. **Pre/Post 对称 executed-count**：Runtime/Post 必须对**每个跑过 Pre 的 Engine**成对执行
+   （Bifrost `PluginPipeline.executedPreHooks`）——保证审计/清扫轴永远与检测轴配对，即使中途 BLOCK。
+3. **★ fail-closed 默认（对 Bifrost 的反转）**：Bifrost 把插件 error 吞成 warning、
+   `PreRequestHook` 根本不能阻断——对安全网关是致命默认。我们规定：**Engine 返回 error
+   ⇒ 按其 `FailMode()` 处理，高敏 Engine 默认 `FailClosed`（error ⇒ BLOCK）**。
+
 - 注册表按 Axis 分组管理，配置文件启停。
-- 内置 Engine（自研）+ 外部 Engine（gRPC sidecar，跨语言，如 Python 行为分析）。
-- 这样 **架构不绑死任一开源项目**：ToolHive 换 Bifrost 只是换一个权限轴 Engine。
+- 内置 Engine（自研）+ 外部 Engine（gRPC sidecar，跨语言）：
+  - 权限轴：vendor ToolHive `authorizers.Authorizer`（近零耦合），Cedar 后端。
+  - 数据/网络轴：Pipelock 作 sidecar egress proxy，签名 YAML 规则。
+  - 行为/因果轴：Python sidecar 内嵌 Invariant `LocalPolicy`/`Monitor.check`。
+- 这样 **架构不绑死任一开源项目**：换 Engine 不动主干。
 
 ---
 
@@ -231,3 +247,31 @@ Gateway ──Event──▶ NATS ──▶ SOC(轨迹/根因/建议) ──策�
 ```
 
 每条策略记录实战命中率，反哺 SOC 的建议排序与误报控制。
+
+---
+
+## 9. 审计原语 —— Action Receipt（采纳自 Pipelock）
+
+每个 `Decision` 除了写普通 Event，还发射一条**签名 action-receipt**作为不可篡改取证凭据。
+直接采纳 Pipelock `internal/receipt` 的设计（实测见 [BASE-PROJECTS-ANALYSIS.md](BASE-PROJECTS-ANALYSIS.md) §2.4），
+它已有 4 语言验证器 + 一致性语料，是低风险的跨轴审计标准化押注。
+
+```
+Receipt {
+  Version, ActionRecord, Signature: "ed25519:...", SignerKey, Ext(未签名)
+}
+ActionRecord {
+  action_id(UUIDv7), parent_action_id, action_type∈{read,write,delegate,spend,actuate...},
+  principal, actor, delegation_chain, intent, data_classes_in/out,
+  side_effect_class, reversibility, policy_hash, verdict, taint,
+  chain_prev_hash, chain_seq
+}
+```
+
+- 签名 = Ed25519 over `SHA-256(canonical ActionRecord)`。
+- **哈希链**：`chain_prev_hash`(首条 genesis) + 单调 `chain_seq`，`run_nonce` 绑定一次运行 → 篡改可检测。
+- 验证只信调用方 `trustedKeys`；严格 Unmarshal 拒重复键/未知字段（防解析器差分走私）。
+- `policy_hash` 每次绑定精确配置快照，免受热加载竞态。
+- 可选把 checkpoint 锚定到透明日志（Rekor），满足 SOC2 / 等保取证。
+
+> 诚实边界：receipt 只证「网关决定了什么 + 持钥者签了名」，不证边界外未发生事。

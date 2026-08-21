@@ -1,5 +1,8 @@
 # 开源选型分析 —— fork 谁 / 自研什么
 
+> 本文是选型**结论**。逐项源码实测（精确接口/文件路径/复用难度）见
+> [`BASE-PROJECTS-ANALYSIS.md`](BASE-PROJECTS-ANALYSIS.md)。以下结论已被实测校正。
+
 结论先行，再展开四个项目的定位、可复用点、以及我们的取舍。
 
 ---
@@ -13,12 +16,18 @@
 反之，自研一层薄主干（Ingress + Risk Decision Engine + Engine 注册表 + 事件闭环），
 让每个开源项目在自己擅长的轴上作为 Engine 接入，可替换、可组合。
 
-| 项目 | 本质 | 在我们产品里的角色 | 复用方式 |
+| 项目 | 本质 | 在我们产品里的角色 | 复用方式（实测校正后） |
 |------|------|--------------------|----------|
-| ToolHive | MCP 安全运行时 / 管理层 | **权限轴** Engine + MCP 运行/隔离底座 | 借鉴 MCP 代理 + 隔离运行 + Cedar 授权 |
-| Bifrost | AI + MCP Gateway | 可选的**模型/MCP 入口** Engine | 需要模型路由时接入，非必须 |
-| Pipelock | Agent 出网防火墙 | **数据/网络轴** Engine | 拆其出网/DLP/SSRF 能力 |
-| Invariant | Agent 行为策略/轨迹分析 | **行为/因果轴** 思想来源 | 借 Guardrails / MCP-Scan / trajectory 思路，不当底座 |
+| ToolHive | MCP 安全运行时 / 管理层 | **权限轴** Engine + MCP 运行/隔离底座 | vendor `authorizers.Authorizer` 接口(近零耦合) + 复用 Cedar 后端；enforcement 照 `vmcp/core.Admission` |
+| Bifrost | AI + MCP Gateway | **借插件范式** + 可选模型上游 | 不 fork（安全能力是 enterprise 闭源）；借 Pre/Post 对称短路 + 统一 MCP 闸 + 审批原语 |
+| Pipelock | Agent 出网防火墙 | **数据/网络轴** Engine + **统一审计原语** | sidecar 运行代理；lift action-receipt 与签名 YAML 规则格式 |
+| Invariant | Agent 行为策略/轨迹分析 | **行为/因果轴** Engine（库内嵌） | 采纳 DSL + `Monitor.check` pre/post 门控；**自建真 taint 替换其位置可达** |
+
+### 实测带来的三处关键校正
+
+1. **Bifrost 不能当底座，且默认要反转**：Guardrails/LB/集群/RBAC 全是 enterprise，OSS 里 `grep guardrail` 0 命中。且它 `PreRequestHook` 不能阻断、插件 error 被吞成 warning——对安全网关是致命默认，我们必须 **fail-closed**。
+2. **Pipelock 最大价值不是代理而是审计原语**：`internal/receipt/` 的 Ed25519 哈希链 action-receipt 已有 4 语言验证器 + 一致性语料，是低风险的跨轴审计标准化押注。代理层深耦合 → sidecar 运行。
+3. **Invariant 的 dataflow 是假污点**：`input.py` 的 `Dataflow` 只是「事件位置可达」，不是真数据流。DSL 与 `Monitor.check` 直接采纳，但**真 taint 传播必须自建**。
 
 ---
 
@@ -81,12 +90,16 @@
 
 ## 3. 落地对应关系
 
-| 我们的模块 | 主要借力 | 备注 |
+| 我们的模块 | 主要借力 | 备注（实测校正） |
 |------------|----------|------|
-| MCP Proxy / 隔离运行 | ToolHive | 部署底座可复用 |
-| 权限轴 Engine + Cedar | ToolHive | 决策收敛到我方引擎 |
-| 数据/网络轴 Engine | Pipelock | 出网/DLP/SSRF 直接拆 |
-| 行为/因果轴 Engine | Invariant | Guardrails/MCP-Scan/taint 思路 |
+| MCP Proxy / 隔离运行 | ToolHive `pkg/container` | 运行时抽象干净，Squid egress 隔离默认开 |
+| 权限轴 Engine + Cedar | ToolHive `authorizers`+`cedar` | 接口近零耦合，决策收敛到我方引擎 |
+| enforcement 形态 | ToolHive `vmcp/core.Admission` | 一授权器同驱 list 过滤 + call 拒绝 |
+| 数据/网络轴 Engine | Pipelock sidecar + 规则格式 | 代理深耦合走 sidecar，规则/语料直接用 |
+| **统一审计原语** | Pipelock `internal/receipt` | Ed25519 哈希链 + 4 语言验证器，全轴共用 |
+| 行为/因果轴 Engine | Invariant `LocalPolicy`/`Monitor` | 库内嵌；真 taint 自建 |
+| Engine 插件范式 | Bifrost `core/schemas/plugin.go` | Pre/Post 对称短路，但改 fail-closed |
+| 审批原语 | Bifrost execute-vs-auto-execute | 「可执行但不自动执行」= 需人工确认 |
 | 可选模型入口 | Bifrost | 需要模型治理时旁路接入 |
 | Risk Decision Engine / 闭环 | 自研 | 产品核心，不外包 |
 

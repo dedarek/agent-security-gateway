@@ -119,8 +119,9 @@ agent-security-gateway/
 ├── deploy/               # 部署 (docker-compose / k8s)
 ├── docs/
 │   ├── PLAN.md               # 详细 step-by-step 分阶段方案 ★
-│   ├── ARCHITECTURE.md       # 三轴引擎 + Pre/Runtime/Post 详解
-│   ├── OPEN-SOURCE-ANALYSIS.md  # 选型结论：fork 谁 / 自研什么
+│   ├── ARCHITECTURE.md       # 三轴引擎 + Pre/Runtime/Post 详解 + Action Receipt 审计
+│   ├── BASE-PROJECTS-ANALYSIS.md # 四项目源码实测（精确接口/路径/复用难度）★
+│   ├── OPEN-SOURCE-ANALYSIS.md   # 选型结论：fork 谁 / 自研什么
 │   └── MVP.md                # 最小可跑闭环 demo 规划
 └── scripts/
 ```
