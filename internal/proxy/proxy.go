@@ -27,6 +27,12 @@ type Forwarder interface {
 	Forward(ctx context.Context, c *api.ToolCall) (*api.ToolResult, error)
 }
 
+// ResultObserver is notified of every tool result, so axes like the taint engine
+// can record untrusted-source output for later data-flow checks.
+type ResultObserver interface {
+	ObserveResult(sessionID, toolID string, output []byte)
+}
+
 // Gateway wires ingress -> decision engine -> approver -> forwarder -> audit + receipts.
 type Gateway struct {
 	Registry   *engine.Registry
@@ -35,6 +41,7 @@ type Gateway struct {
 	Audit      audit.Sink
 	Sessions   *session.Store
 	Receipts   *receipt.Emitter
+	Observers  []ResultObserver
 	PolicyHash string
 }
 
@@ -73,6 +80,12 @@ func (g *Gateway) Handle(ctx context.Context, c *api.ToolCall) (*api.ToolResult,
 	}
 	if g.Sessions != nil && res != nil {
 		g.Sessions.AppendToolResult(c.Principal.SessionID, c.CallID, string(res.Output))
+	}
+	// Feed the result to observers (taint engine records untrusted-source output).
+	if res != nil {
+		for _, obs := range g.Observers {
+			obs.ObserveResult(c.Principal.SessionID, c.ToolID, res.Output)
+		}
 	}
 
 	// ---- POST ----

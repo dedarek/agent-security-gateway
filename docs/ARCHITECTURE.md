@@ -220,14 +220,19 @@ type Engine interface {
 
 ## 7. 部署形态
 
-| 形态 | 用途 | 拦截点 |
-|------|------|--------|
-| MCP Proxy | 主形态，Agent 连 Gateway 虚拟 MCP | 工具调用参数/返回 |
-| Forward Proxy (MITM) | 管住 Agent 任意出网 HTTP(S) | 出网流量（数据/网络轴） |
-| Sidecar + /v1/decision | 自研 Agent 主动送审 | 应用内埋点 |
-| K8s DaemonSet + eBPF | 集群级出网可见性 | 网络层 |
+| 形态 | 用途 | 拦截点 | 状态 |
+|------|------|--------|------|
+| MCP Proxy | 主形态，Agent 连 Gateway 虚拟 MCP | 工具调用参数/返回 | **已实现**（`internal/mcpproxy` + 官方 Go MCP SDK，连真上游 server 进程） |
+| Forward Proxy (MITM) | 管住 Agent 任意出网 HTTP(S) | 出网流量（数据/网络轴） | 规划中（Pipelock sidecar） |
+| Sidecar + /v1/decision | 自研 Agent 主动送审 | 应用内埋点 | 规划中 |
+| K8s DaemonSet + eBPF | 集群级出网可见性 | 网络层 | 规划中 |
 
 生产：Gateway 无状态水平扩展；策略/身份/事件走集中存储；SOC 与控制台独立部署。
+
+> **行为/因果轴的真 taint**：`internal/engine/taint.go` 做内容级数据流溯源（email/URL token +
+> 长子串），只有当 sink 参数值确实源自不可信源内容才拦截——替换了 Invariant `Dataflow` 的
+> 「位置可达」（后者会把不可信事件之后的任意 sink 都误判）。上游结果经 `ResultObserver` 回灌
+> 污点存储，形成 source→sink 的真实数据流判定。
 
 ---
 

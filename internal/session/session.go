@@ -29,9 +29,21 @@ type Function struct {
 type Store struct {
 	mu     sync.RWMutex
 	traces map[string][]Message
+	taints map[string][]TaintMark
 }
 
-func NewStore() *Store { return &Store{traces: map[string][]Message{}} }
+// TaintMark records untrusted content observed in a session, with the extracted
+// high-signal tokens (emails, URLs) for precise data-flow checks. This is the
+// state behind real content-based taint propagation (not positional reachability).
+type TaintMark struct {
+	Source  string   // tool that produced the untrusted output, e.g. "get_inbox"
+	Content string   // full untrusted text
+	Tokens  []string // extracted emails/URLs/identifiers
+}
+
+func NewStore() *Store {
+	return &Store{traces: map[string][]Message{}, taints: map[string][]TaintMark{}}
+}
 
 // AppendToolCall records an assistant message that issues a tool call.
 func (s *Store) AppendToolCall(sessionID, callID, toolName, argsJSON string) {
@@ -61,6 +73,23 @@ func (s *Store) Trace(sessionID string) []Message {
 	defer s.mu.RUnlock()
 	src := s.traces[sessionID]
 	out := make([]Message, len(src))
+	copy(out, src)
+	return out
+}
+
+// MarkUntrusted records untrusted content (a taint source) for a session.
+func (s *Store) MarkUntrusted(sessionID, source, content string, tokens []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.taints[sessionID] = append(s.taints[sessionID], TaintMark{Source: source, Content: content, Tokens: tokens})
+}
+
+// Taints returns the untrusted marks accumulated in a session (copy).
+func (s *Store) Taints(sessionID string) []TaintMark {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	src := s.taints[sessionID]
+	out := make([]TaintMark, len(src))
 	copy(out, src)
 	return out
 }

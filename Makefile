@@ -1,18 +1,22 @@
-.PHONY: build run demo tidy fmt test sidecar
+.PHONY: build run demo tidy fmt test sidecar binaries
 
 # Build all Go packages.
 build:
 	go build ./...
 
-# Run the gateway demo (behavior axis needs the sidecar; use `make demo` for both).
-run:
-	go run ./cmd/gateway
+# Build the gateway + real upstream MCP server binaries.
+binaries:
+	go build -o bin/upstream-mcp ./cmd/upstream-mcp
+	go build -o bin/gateway ./cmd/gateway
 
-# Full MVP demo: starts the Invariant sidecar, runs all three axes, stops sidecar.
-demo:
-	./scripts/demo.sh
+# Full MVP demo: real MCP proxy + three axes + signed receipts.
+demo: binaries
+	./bin/gateway
 
-# Start only the Invariant behavior sidecar (foreground).
+# Alias.
+run: demo
+
+# Optional: the Invariant DSL behavior sidecar (alternative to the built-in taint axis).
 sidecar:
 	LOCAL_POLICY=1 intelligence/.venv/bin/python intelligence/analyzer/sidecar.py \
 		--policy intelligence/analyzer/policy.iv --port 8900
@@ -25,3 +29,4 @@ fmt:
 
 test:
 	go test ./...
+
