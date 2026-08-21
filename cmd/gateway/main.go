@@ -24,19 +24,25 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"time"
 
 	"github.com/dedarek/agent-security-gateway/api"
+	"github.com/dedarek/agent-security-gateway/internal/approval"
 	"github.com/dedarek/agent-security-gateway/internal/audit"
+	"github.com/dedarek/agent-security-gateway/internal/authn"
 	"github.com/dedarek/agent-security-gateway/internal/config"
 	"github.com/dedarek/agent-security-gateway/internal/engine"
 	"github.com/dedarek/agent-security-gateway/internal/ingress"
 	"github.com/dedarek/agent-security-gateway/internal/mcpproxy"
+	"github.com/dedarek/agent-security-gateway/internal/policyhub"
 	"github.com/dedarek/agent-security-gateway/internal/proxy"
 	"github.com/dedarek/agent-security-gateway/internal/receipt"
 	"github.com/dedarek/agent-security-gateway/internal/rulesbundle"
 	"github.com/dedarek/agent-security-gateway/internal/session"
+	"github.com/dedarek/agent-security-gateway/internal/store"
+	"github.com/dedarek/agent-security-gateway/internal/webui"
 )
 
 type autoApprover struct{}
@@ -70,12 +76,36 @@ func loadConfig(path string) config.Config {
 func serveCmd(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	cfgPath := fs.String("config", "deploy/config.dev.yaml", "path to YAML config")
+	tenantsPath := fs.String("tenants", "", "path to tenants YAML (multi-tenant auth)")
 	fs.Parse(args)
 
 	cfg := loadConfig(*cfgPath)
 	rulesbundle.SetExtraTrustedKeys(cfg.ExtraTrustedKeysHex)
 
 	ctx := context.Background()
+
+	var authReg *authn.Registry
+	if *tenantsPath != "" {
+		reg, err := authn.Load(*tenantsPath)
+		if err != nil {
+			log.Fatalf("authn: %v", err)
+		}
+		authReg = reg
+		log.Printf("[authn] multi-tenant mode: %d active tenants from %s", reg.Count(), *tenantsPath)
+	} else {
+		authReg = authn.Bootstrap()
+		log.Printf("[authn] bootstrap single dev tenant (key from ASG_DEV_TENANT_KEY or 'dev-key')")
+	}
+
+	// Event store + audit sink (JSONL on disk; UI reads it back).
+	evStore, err := store.Open(cfg.EventLogPath)
+	if err != nil {
+		log.Fatalf("event store: %v", err)
+	}
+	auditSink := audit.Sink(audit.StdoutSink{})
+	if evStore != nil {
+		auditSink = multiSink{audit.StdoutSink{}, evStore}
+	}
 
 	perm, err := engine.NewPermissionEngineFromFile(cfg.CedarPolicyPath)
 	if err != nil {
@@ -86,33 +116,61 @@ func serveCmd(args []string) {
 		log.Fatalf("datanetwork engine: %v", err)
 	}
 
-	store := session.NewStore()
-	taint := engine.NewTaintEngine(store, cfg.TaintSources, cfg.TaintSinks, api.FailClosed)
+	store_ := session.NewStore()
+	taint := engine.NewTaintEngine(store_, cfg.TaintSources, cfg.TaintSinks, api.FailClosed)
 
 	reg := engine.NewRegistry()
 	reg.Register(perm)
 	reg.Register(dn)
 	reg.Register(taint)
-	registerBehaviorSidecar(reg, store, cfg)
+	registerBehaviorSidecar(reg, store_, cfg)
 
 	emitter, err := receipt.NewEmitter()
 	if err != nil {
 		log.Fatalf("receipt emitter: %v", err)
 	}
+	approvals := approval.NewManager(cfg.ApprovalTimeout)
+	hub := policyhub.New(cfg.CedarPolicyPath)
+
 	gw := &proxy.Gateway{
 		Registry:   reg,
-		Approver:   autoApprover{},
+		Approver:   approvals,
 		Forwarder:  &liveForwarder{up: dialForServe(ctx, cfg)},
-		Audit:      audit.StdoutSink{},
-		Sessions:   store,
+		Audit:      auditSink,
+		Sessions:   store_,
 		Receipts:   emitter,
 		Observers:  []proxy.ResultObserver{taint},
 		PolicyHash: policyHash(cfg.CedarPolicyPath, cfg.RulesPath),
 	}
 	log.Printf("[gateway] engines ready; policy hash %s", gw.PolicyHash)
-	if err := ingress.Serve(ctx, cfg.Listen, gw, cfg.UpstreamCommand); err != nil {
+
+	// Operator console + Intelligence API on the same listener.
+	uiMux := http.NewServeMux()
+	webui.New(evStore, approvals, hub).Register(uiMux)
+	go func() {
+		uiAddr := cfg.UIListen
+		if uiAddr == "" {
+			uiAddr = ":8090"
+		}
+		log.Printf("[webui] operator console listening on %s", uiAddr)
+		if err := http.ListenAndServe(uiAddr, uiMux); err != nil {
+			log.Printf("[webui] stopped: %v", err)
+		}
+	}()
+
+	if err := ingress.Serve(ctx, cfg.Listen, gw, cfg.UpstreamCommand, authReg); err != nil {
 		log.Fatalf("ingress: %v", err)
 	}
+}
+
+// multiSink fans audit events out to several sinks.
+type multiSink []audit.Sink
+
+func (m multiSink) Write(ev api.Event) error {
+	for _, s := range m {
+		_ = s.Write(ev)
+	}
+	return nil
 }
 
 func dialForServe(ctx context.Context, cfg config.Config) *mcpproxy.Upstream {

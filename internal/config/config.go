@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -28,6 +29,13 @@ type Config struct {
 	// Behavior sidecar (Invariant analyzer). Empty => engine disabled.
 	BehaviorSidecarURL string `yaml:"behavior_sidecar_url"`
 	BehaviorFailOpen   bool   `yaml:"behavior_fail_open"`
+
+	// Operations: event log (JSONL) for the Intelligence plane, operator UI
+	// listener, approval timeout, multi-tenant registry file.
+	EventLogPath    string        `yaml:"event_log_path"`
+	UIListen        string        `yaml:"ui_listen"`
+	ApprovalTimeout time.Duration `yaml:"approval_timeout"`
+	TenantsPath     string        `yaml:"tenants_path"`
 }
 
 // Default returns config for the MVP demo (paths relative to repo root).
@@ -40,6 +48,9 @@ func Default() Config {
 		TaintSources:             []string{"get_inbox", "read_secret", "fetch", "read_file"},
 		TaintSinks:               []string{"send_email", "http_post", "export_all_users"},
 		IncludeExperimentalRules: false,
+		EventLogPath:             "./data/events.jsonl",
+		UIListen:                 ":8090",
+		ApprovalTimeout:          120 * time.Second,
 	}
 }
 

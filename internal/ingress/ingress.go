@@ -22,6 +22,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/dedarek/agent-security-gateway/api"
+	"github.com/dedarek/agent-security-gateway/internal/authn"
 	"github.com/dedarek/agent-security-gateway/internal/proxy"
 )
 
@@ -29,16 +30,16 @@ import (
 type Ingress struct {
 	Gateway *proxy.Gateway
 	Mux     *http.ServeMux
+	Auth    *authn.Registry // nil => bootstrap single dev tenant
 }
 
-// principalFromContext derives who is calling. MVP: single demo tenant until
-// auth lands (API key / OIDC per runtime).
-func principalFromContext(sessionID string) api.Principal {
+// principalFor maps an authenticated tenant to the decision-plane identity.
+func principalFor(t authn.Tenant) api.Principal {
 	return api.Principal{
-		UserID:    "local-user",
-		AgentID:   "connected-agent",
-		SessionID: sessionID,
-		Role:      "employee",
+		UserID:    t.UserID,
+		AgentID:   t.Name,
+		SessionID: "tenant-" + t.Name,
+		Role:      t.Role,
 	}
 }
 
@@ -63,9 +64,23 @@ func (ing *Ingress) mcpServer(upstream *upstreamSurface) *mcp.Server {
 				argsJSON = []byte("{}")
 			}
 
+			// Multi-tenant identity: resolve the caller from the transport
+			// (Authorization header travels in the HTTP request context).
+			tenant := authn.BootstrapTenant()
+			if ing.Auth != nil {
+				var ok bool
+				tenant, ok = ing.Auth.Authenticate(headerFromCtx(ctx))
+				if !ok {
+					return &mcp.CallToolResult{
+						Content: []mcp.Content{&mcp.TextContent{Text: "unauthorized: unknown or disabled API key"}},
+						IsError: true,
+					}, nil
+				}
+			}
+
 			call := &api.ToolCall{
 				CallID:    fmt.Sprintf("ing-%s-%d", req.Params.Name, time.Now().UnixNano()),
-				Principal: principalFromContext(sessionFromCtx(ctx)),
+				Principal: principalFor(tenant),
 				ToolID:    "gw." + toolName,
 				Resource:  "gw",
 				Action:    actionFor(toolName),
@@ -96,18 +111,20 @@ func (ing *Ingress) mcpServer(upstream *upstreamSurface) *mcp.Server {
 
 // Serve starts the HTTP listener. It dials the upstream first so the published
 // tool list is the real one.
-func Serve(ctx context.Context, listen string, gw *proxy.Gateway, upstreamCmd []string) error {
+func Serve(ctx context.Context, listen string, gw *proxy.Gateway, upstreamCmd []string, authRegistry *authn.Registry) error {
 	surface, err := DialUpstream(ctx, upstreamCmd)
 	if err != nil {
 		return fmt.Errorf("dial upstream for ingress: %w", err)
 	}
 	defer surface.Close()
 
-	ing := &Ingress{Gateway: gw, Mux: http.NewServeMux()}
+	ing := &Ingress{Gateway: gw, Mux: http.NewServeMux(), Auth: authRegistry}
 	handler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		return ing.mcpServer(surface)
 	}, &mcp.StreamableHTTPOptions{Stateless: true})
-	ing.Mux.Handle("/mcp", handler)
+	// Install the Authorization header into the request context so tool
+	// handlers can resolve the tenant identity.
+	ing.Mux.Handle("/mcp", injectAuthHeader(handler))
 	ing.Mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
@@ -125,6 +142,25 @@ func Serve(ctx context.Context, listen string, gw *proxy.Gateway, upstreamCmd []
 // sessionFromCtx extracts an MCP session id when present (stateless mode may
 // not have one); falls back to a stable demo session.
 func sessionFromCtx(_ context.Context) string { return "ingress-default" }
+
+// headerFromCtx pulls the Authorization header out of the request-scoped
+// context installed by the streamable HTTP handler.
+func headerFromCtx(ctx context.Context) string {
+	if v, ok := ctx.Value(authHeaderKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
+type authHeaderKey struct{}
+
+// injectAuthHeader copies the Authorization header into the request context.
+func injectAuthHeader(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), authHeaderKey{}, r.Header.Get("Authorization"))
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
 
 // actionFor maps a tool name to the coarse action verb used by receipts.
 func actionFor(name string) string {

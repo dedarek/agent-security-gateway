@@ -1,0 +1,13 @@
+# Multi-tenant identity for the gateway ingress.
+# api_key values are examples — rotate for any real deployment.
+tenants:
+  - name: alice
+    api_key: sk-alice-demo-key
+    role: employee
+    user_id: alice@corp.com
+    enabled: true
+  - name: secops
+    api_key: sk-secops-demo-key
+    role: admin
+    user_id: soc@corp.com
+    enabled: true

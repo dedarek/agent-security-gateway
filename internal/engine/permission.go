@@ -23,9 +23,27 @@ import (
 // The two-action check implements Bifrost's execute-vs-auto-execute split as the
 // human-in-the-loop primitive. See docs/BASE-PROJECTS-ANALYSIS.md §1 & §3.4.
 type PermissionEngine struct {
-	mu        sync.RWMutex
-	policySet *cedar.PolicySet
+	mu         sync.RWMutex
+	policySet  *cedar.PolicySet
+	policyPath string
 }
+
+// ReloadPermissionPolicies re-parses the policy file of the process-wide
+// permission engine (if registered) — used by the Intelligence accept-policy
+// loop to hot-apply new rules without a gateway restart.
+func ReloadPermissionPolicies(path string) error {
+	permMu.Lock()
+	defer permMu.Unlock()
+	if permGlobal == nil {
+		return fmt.Errorf("no permission engine registered")
+	}
+	return permGlobal.ReloadFromFile(path)
+}
+
+var (
+	permMu     sync.Mutex
+	permGlobal *PermissionEngine
+)
 
 // NewPermissionEngineFromFile loads Cedar policies from a .cedar file.
 func NewPermissionEngineFromFile(path string) (*PermissionEngine, error) {
@@ -33,7 +51,15 @@ func NewPermissionEngineFromFile(path string) (*PermissionEngine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read cedar policy: %w", err)
 	}
-	return NewPermissionEngineFromString(string(src))
+	pe, err := NewPermissionEngineFromString(string(src))
+	if err != nil {
+		return nil, err
+	}
+	pe.policyPath = path
+	permMu.Lock()
+	permGlobal = pe
+	permMu.Unlock()
+	return pe, nil
 }
 
 // NewPermissionEngineFromString loads Cedar policies from a policy string.
@@ -43,6 +69,23 @@ func NewPermissionEngineFromString(policyText string) (*PermissionEngine, error)
 		return nil, fmt.Errorf("parse cedar policies: %w", err)
 	}
 	return &PermissionEngine{policySet: ps}, nil
+}
+
+// ReloadFromFile re-parses the policy file and swaps the live policy set
+// atomically. On parse failure the old set stays active (fail-closed).
+func (p *PermissionEngine) ReloadFromFile(path string) error {
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read cedar policy: %w", err)
+	}
+	ps, err := cedar.NewPolicySetFromBytes("permission.cedar", src)
+	if err != nil {
+		return fmt.Errorf("parse cedar policies: %w", err)
+	}
+	p.mu.Lock()
+	p.policySet = ps
+	p.mu.Unlock()
+	return nil
 }
 
 func (p *PermissionEngine) Name() string           { return "permission.cedar" }
