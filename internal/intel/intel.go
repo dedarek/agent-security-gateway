@@ -152,3 +152,73 @@ func truncate(s string, n int) string {
 func SortSuggestions(all []*Suggestion) {
 	sort.Slice(all, func(i, j int) bool { return all[i].ID > all[j].ID })
 }
+
+// Cluster aggregates equivalent attack patterns across sessions: same sink
+// tool fed by the same kind of untrusted source is one campaign, not N
+// coincidences. This is what turns isolated blocks into fleet-wide insight.
+type Cluster struct {
+	Key          string   `json:"key"`
+	Count        int      `json:"count"`
+	Sessions     []string `json:"sessions"`
+	BlockedTool  string   `json:"blocked_tool"`
+	SourceTool   string   `json:"source_tool,omitempty"`
+	Pattern      string   `json:"pattern"`
+	SamplePolicy string   `json:"sample_policy"`
+}
+
+// BuildClusters groups open suggestions into cross-session campaigns,
+// largest first. (Not named Cluster: the type takes that identifier.)
+func BuildClusters(all []*Suggestion) []Cluster {
+	by := map[string]*Cluster{}
+	for _, sg := range all {
+		if sg.Status != "open" {
+			continue
+		}
+		src := sourceOf(sg)
+		key := sg.BlockedTool + "|" + src
+		c, ok := by[key]
+		if !ok {
+			c = &Cluster{Key: key, BlockedTool: sg.BlockedTool, SourceTool: src, Pattern: patternOf(src)}
+			by[key] = c
+		}
+		c.Count++
+		c.Sessions = append(c.Sessions, sg.SessionID)
+		if c.SamplePolicy == "" {
+			c.SamplePolicy = sg.CedarPolicy
+		}
+	}
+	out := []Cluster{}
+	for _, c := range by {
+		sort.Strings(c.Sessions)
+		out = append(out, *c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Count > out[j].Count })
+	return out
+}
+
+// sourceOf extracts the origin tool from the reconstructed chain.
+func sourceOf(sg *Suggestion) string {
+	for _, step := range sg.Chain {
+		for _, src := range []string{"get_inbox", "read_secret", "fetch", "read_file"} {
+			if strings.HasPrefix(step, src) || strings.Contains(step, src+" returned") {
+				return src
+			}
+		}
+	}
+	return ""
+}
+
+func patternOf(source string) string {
+	switch source {
+	case "get_inbox":
+		return "indirect prompt injection via email -> data egress"
+	case "read_secret":
+		return "secret harvesting -> external send"
+	case "fetch":
+		return "malicious web content -> egress"
+	case "read_file":
+		return "untrusted file content -> egress"
+	default:
+		return "direct policy violation"
+	}
+}

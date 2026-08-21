@@ -47,6 +47,10 @@ button:hover{filter:brightness(1.15)}
       <h2>Pending approvals</h2>
       <div id="approvals"><div class="empty">无待审批请求</div></div>
     </div>
+    <div class="panel" style="margin-top:16px">
+      <h2>Attack clusters (cross-session)</h2>
+      <div id="clusters"><div class="empty">暂无聚类</div></div>
+    </div>
   </div>
   <div class="panel">
     <h2>Trajectory & root cause</h2>
@@ -111,8 +115,19 @@ async function vote(id,approve){
   await j('/api/approvals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,approve})});
   loadApprovals();
 }
-loadSessions();loadTrajectory();loadApprovals();
-setInterval(()=>{loadSessions();loadApprovals()},4000);
+async function loadClusters(){
+  const cs=await j('/api/clusters');
+  const box=document.getElementById('clusters');
+  if(!(cs&&cs.length)){box.innerHTML='<div class="empty">暂无聚类</div>';return}
+  box.innerHTML='';
+  cs.forEach(c=>{
+    const d=document.createElement('div');d.className='apr';
+    d.innerHTML=`<div><b>×${c.count}</b> ${c.pattern}<div style="color:var(--dim);font-size:12px">${c.source_tool||'?'} → ${c.blocked_tool} · ${c.sessions.join(', ')}</div></div>`;
+    box.appendChild(d);
+  });
+}
+loadSessions();loadTrajectory();loadApprovals();loadClusters();
+setInterval(()=>{loadSessions();loadApprovals();loadClusters()},4000);
 </script>
 </body>
 </html>

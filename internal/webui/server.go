@@ -7,7 +7,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"net/http"
-	"strconv"
+	"strings"
 
 	"github.com/dedarek/agent-security-gateway/api"
 	"github.com/dedarek/agent-security-gateway/internal/approval"
@@ -45,6 +45,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/approvals", s.apiApprovals)
 	mux.HandleFunc("/api/suggestions", s.apiSuggestions)
 	mux.HandleFunc("/api/suggestion/decide", s.apiSuggestionDecide)
+	mux.HandleFunc("/api/clusters", s.apiClusters)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
@@ -106,10 +107,22 @@ func (s *Server) apiApprovals(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiSuggestions(w http.ResponseWriter, _ *http.Request) {
 	out := []*intel.Suggestion{}
 	for _, sg := range s.suggs {
-		out = append(out, sg)
+		if strings.HasPrefix(sg.ID, "sug-") { // skip session-cache alias keys
+			out = append(out, sg)
+		}
 	}
 	intel.SortSuggestions(out)
 	writeJSON(w, out)
+}
+
+func (s *Server) apiClusters(w http.ResponseWriter, _ *http.Request) {
+	open := []*intel.Suggestion{}
+	for _, sg := range s.suggs {
+		if strings.HasPrefix(sg.ID, "sug-") && sg.Status == "open" {
+			open = append(open, sg)
+		}
+	}
+	writeJSON(w, intel.BuildClusters(open))
 }
 
 func (s *Server) apiSuggestionDecide(w http.ResponseWriter, r *http.Request) {
@@ -138,8 +151,6 @@ func (s *Server) apiSuggestionDecide(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, sg)
 }
-
-var _ = strconv.Itoa
 
 // sugKey namespaces the per-session cache index.
 func sugKey(session string) string { return "sess:" + session }
