@@ -1,0 +1,27 @@
+# Binaries / build
+/bin/
+/dist/
+*.exe
+*.out
+
+# Go
+/vendor/
+*.test
+coverage.*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Env / secrets
+.env
+.env.local
+*.local.yaml
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,14 @@
+listen: ":8080"
+upstream: "http://127.0.0.1:9000"   # real MCP server behind the gateway
+policy:
+  cedar_path: "./deploy/policies"
+engines:
+  - name: "permission.cedar-stub"
+    enabled: true
+  # - name: "datanetwork.pipelock"   # Phase 2
+  #   enabled: false
+  # - name: "behavior.invariant"     # Phase 3
+  #   enabled: false
+audit:
+  dsn: ""      # empty => stdout sink (MVP)
+  topic: ""    # empty => no event-bus publish
