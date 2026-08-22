@@ -6,6 +6,7 @@ providers:
     base_url: "https://opencode.ai/zen/go/v1"
     api_key: "${OPENCODE_GO_API_KEY}"
     default_model: "ox-alpha-free"
+    allowed_models: ["ox-alpha-free"]
 
 hub_url: "http://127.0.0.1:8090"   # central ASG gateway (ingest lives on the UI/API listener)
 tenant_key: "dev-key"

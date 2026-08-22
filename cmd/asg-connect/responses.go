@@ -115,7 +115,11 @@ func (p *llmProxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	prov, _ := p.route(mustJSON(chat))
+	prov, _, routeErr := p.route(mustJSON(chat))
+	if routeErr != nil {
+		http.Error(w, `{"error":{"type":"quota_protection","message":"model not allowed"}}`, http.StatusForbidden)
+		return
+	}
 	upURL := strings.TrimSuffix(prov.BaseURL, "/")
 	if !strings.HasSuffix(upURL, "/v1") {
 		upURL += "/v1"

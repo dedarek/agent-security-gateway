@@ -75,7 +75,14 @@ func (p *llmProxy) handleLLM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	prov, upstreamModel := p.route(body)
+	prov, upstreamModel, routeErr := p.route(body)
+	if routeErr != nil {
+		// quota protection: deny non-free models before they hit the provider
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"error":{"type":"quota_protection","message":` + jsonQuote(routeErr.Error()) + `}}`))
+		return
+	}
 	start := time.Now()
 
 	// Rewrite the model field to the upstream model id the router chose.
@@ -182,9 +189,19 @@ func (p *llmProxy) handleLLM(w http.ResponseWriter, r *http.Request) {
 	w.Write(respBody)
 }
 
-// route picks the provider by model name (agent-visible name may map to a
-// different upstream id per provider config).
-func (p *llmProxy) route(body []byte) (*Provider, string) {
+// route picks the provider by model name.
+// ALLOWED MODELS: only free-tier models — paid models burn quota and are
+// rejected outright (fail-closed). Empty allowlist = first provider default.
+func (p *llmProxy) route(body []byte) (*Provider, string, error) {
+	allowed := map[string]bool{
+		"ox-alpha-free": true,
+	}
+	for _, prov := range p.cfg.Providers {
+		for _, m := range prov.AllowedModels {
+			allowed[strings.ToLower(m)] = true
+		}
+	}
+
 	var req struct {
 		Model string `json:"model"`
 	}
@@ -192,15 +209,26 @@ func (p *llmProxy) route(body []byte) (*Provider, string) {
 	_ = jsonUnmarshal(body, &req)
 	model = req.Model
 
+	// Any model name the agent invents (claude-opus-5, gpt-4o, ...) is
+	// silently remapped to this provider's free default. The allowlist only
+	// governs what may leave the box; agents never burn paid quota.
+	if model != "" && !allowed[strings.ToLower(model)] {
+		for i := range p.cfg.Providers {
+			if p.cfg.Providers[i].DefaultModel != "" {
+				model = p.cfg.Providers[i].AllowedModels[0]
+			}
+		}
+	}
+
 	for i := range p.cfg.Providers {
 		prov := &p.cfg.Providers[i]
 		if prov.ModelMap != nil {
 			if up, ok := prov.ModelMap[model]; ok {
-				return prov, up
+				return prov, up, nil
 			}
 		}
 		if model == "" {
-			return prov, prov.DefaultModel
+			return prov, prov.DefaultModel, nil
 		}
 	}
 	// An explicitly requested model name is passed through verbatim to the
@@ -212,7 +240,7 @@ func (p *llmProxy) route(body []byte) (*Provider, string) {
 		if up == "" && prov.DefaultModel != "" {
 			up = prov.DefaultModel
 		}
-		return prov, up
+		return prov, up, nil
 	}
 	// fallback: first provider; unknown model names map to its default so
 	// agents sending their own defaults (claude-opus-5 etc.) still work.
@@ -222,9 +250,9 @@ func (p *llmProxy) route(body []byte) (*Provider, string) {
 		if prov.DefaultModel != "" {
 			up = prov.DefaultModel
 		}
-		return prov, up
+		return prov, up, nil
 	}
-	return &Provider{Name: "none"}, model
+	return &Provider{Name: "none"}, model, fmt.Errorf("no providers configured")
 }
 
 // matchFamily lets agents send any model alias containing the provider tag.
@@ -236,3 +264,8 @@ func matchFamily(model, name string) bool {
 }
 
 var _ = context.Background
+
+func jsonQuote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}

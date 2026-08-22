@@ -46,6 +46,10 @@ type Provider struct {
 	// to this provider; per-model mapping can override.
 	DefaultModel string            `yaml:"default_model,omitempty"`
 	ModelMap     map[string]string `yaml:"model_map,omitempty"` // agent-visible -> upstream model id
+
+	// AllowedModels restricts which model names may be forwarded (quota guard).
+	// Empty slice = first provider default only.
+	AllowedModels []string `yaml:"allowed_models,omitempty"`
 }
 
 type MCPUpstream struct {
