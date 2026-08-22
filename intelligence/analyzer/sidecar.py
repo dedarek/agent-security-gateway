@@ -21,9 +21,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 os.environ.setdefault("LOCAL_POLICY", "1")
 
 try:
-    from invariant.analyzer import LocalPolicy
+    # Policy (not LocalPolicy) injects the stdlib symbol table so DSL types
+    # like ToolCall resolve; verified against invariant-ai 0.3.5.
+    from invariant.analyzer import Policy
 except Exception as e:  # pragma: no cover
-    print(f"[sidecar] failed to import invariant LocalPolicy: {e}", file=sys.stderr)
+    print(f"[sidecar] failed to import invariant Policy: {e}", file=sys.stderr)
     print("[sidecar] install with: pip install invariant-ai", file=sys.stderr)
     raise
 
@@ -49,7 +51,7 @@ def _normalize(trace):
 def load_policy(path: str):
     with open(path, "r", encoding="utf-8") as f:
         src = f.read()
-    return LocalPolicy.from_string(src)
+    return Policy.from_string(src)
 
 
 class Handler(BaseHTTPRequestHandler):

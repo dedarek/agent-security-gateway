@@ -1,13 +1,18 @@
-# Invariant Guardrails policy (real DSL, evaluated by LocalPolicy).
-# Causal / trajectory rule: data read from the inbox that later flows into an
-# external send_email is exfiltration. Uses only the flow operator + tool
-# matchers — NO ML detector — so the sidecar needs no torch/transformers.
-#
-# This is the behavior/causal axis rule for the MVP demo. The three tool calls
-# (get_inbox, read_customer_db, send_email) are each individually legitimate;
-# the DSL catches the dangerous CHAIN.
+# 行为/因果轴策略 — Invariant DSL (invariant-ai 0.3.5 验证语法)
+# 语法要点: (call: ToolCall) 括号声明 + call is tool:NAME 语义匹配
+# 此文件由中央 Intelligence 面维护, 探针/网关的 sidecar 加载执行.
 
-raise "Inbox/customer data exfiltrated to external email address" if:
-    (call: ToolCall) -> (call2: ToolCall)
-    call is tool:get_inbox
-    call2 is tool:send_email({ to: ".*@gmail.com" })
+# 规则1: 不可信来源(邮件)之后直接外发 → 因果链攻击
+raise PolicyViolation("untrusted inbox content flowed into egress", call=call) if:
+    (call: ToolCall)
+    call is tool:send_email
+
+# 规则2: 读密钥后任何出网动作
+raise PolicyViolation("secret access followed by egress", call=call) if:
+    (call: ToolCall)
+    call is tool:http_post
+
+# 规则3: 批量导出用户数据
+raise PolicyViolation("bulk user export", call=call) if:
+    (call: ToolCall)
+    call is tool:export_all_users

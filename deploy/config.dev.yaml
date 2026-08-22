@@ -19,5 +19,5 @@ include_experimental_rules: false
 # extra_trusted_keys_hex: ""   # optional third-party rule signers
 
 # Behavior sidecar (Invariant analyzer). Empty => engine disabled.
-behavior_sidecar_url: ""
+behavior_sidecar_url: "http://127.0.0.1:8901"
 behavior_fail_open: true
