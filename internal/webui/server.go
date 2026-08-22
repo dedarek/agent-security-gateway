@@ -31,6 +31,7 @@ func New(st *store.Store, am *approval.Manager, hub *policyhub.Hub) *Server {
 }
 
 func (s *Server) Register(mux *http.ServeMux) {
+	s.RegisterIngest(mux)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)

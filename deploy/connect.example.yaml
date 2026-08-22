@@ -1,0 +1,17 @@
+# asg-connect probe configuration (per developer machine).
+# The user configures their OWN model + key here once; agents then use any
+# model name routed by the probe. Reporting goes to the central gateway.
+
+listen: "127.0.0.1:8181"
+
+providers:
+  - name: opencode-zen
+    base_url: "https://opencode.ai/zen/go/v1"
+    api_key: "${OPENCODE_GO_API_KEY}"
+    default_model: "x-preview-f-free"
+
+hub_url: "http://127.0.0.1:8080"   # central ASG gateway
+tenant_key: "dev-key"
+tenant_name: "local"
+
+event_spool_path: "./connect-events.jsonl"

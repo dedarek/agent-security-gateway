@@ -1,0 +1,202 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+)
+
+func osOpenAppend(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+}
+
+// serve runs the local proxy: an OpenAI/Anthropic-compatible transparent
+// forwarder with full traffic capture, plus a periodic flusher.
+func serve(cfgPath string) error {
+	cfg, err := loadProbeConfig(cfgPath)
+	if err != nil {
+		return err
+	}
+	rep := newReporter(cfg.HubURL, cfg.TenantKey, cfg.EventSpoolPath)
+	p := &llmProxy{cfg: cfg, rep: rep}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/", p.handleLLM)
+	mux.HandleFunc("/v1/messages", p.handleLLM)     // anthropic style (also under /v1/)
+	mux.HandleFunc("/v1/responses", p.handleResponses) // OpenAI Responses API (Codex)
+	mux.HandleFunc("/responses", p.handleResponses)
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("ok"))
+	})
+	registerMCPShim(mux, cfg)
+
+	// Periodic flush so low-traffic machines still ship events.
+	go func() {
+		for range time.Tick(10 * time.Second) {
+			if err := rep.Flush(); err != nil {
+				log.Printf("[reporter] flush deferred: %v", err)
+			}
+		}
+	}()
+
+	log.Printf("[asg-connect] probe listening on %s (hub=%s tenant=%s)",
+		cfg.Listen, cfg.HubURL, cfg.TenantName)
+	srv := &http.Server{Addr: cfg.Listen, Handler: mux}
+	err = srv.ListenAndServe()
+	if err == http.ErrServerClosed {
+		return nil
+	}
+	return err
+}
+
+// llmProxy forwards /v1/* to the provider matching the requested model,
+// capturing both directions.
+type llmProxy struct {
+	cfg *ProbeConfig
+	rep *reporter
+}
+
+func (p *llmProxy) handleLLM(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+
+	prov, upstreamModel := p.route(body)
+	start := time.Now()
+
+	// Rewrite the model field to the upstream model id the router chose.
+	if upstreamModel != "" {
+		var reqObj map[string]any
+		if jsonUnmarshal(body, &reqObj) == nil && reqObj["model"] != upstreamModel {
+			reqObj["model"] = upstreamModel
+			if nb, err := json.Marshal(reqObj); err == nil {
+				body = nb
+			}
+		}
+	}
+
+	// Anthropic dialect translation happens BEFORE building the upstream
+	// request: the sanitized bytes are what actually goes on the wire.
+	if strings.Contains(r.URL.Path, "/messages") {
+		body = sanitizeAnthropicForZen(body)
+		if p := os.Getenv("ASG_DUMP"); p != "" {
+			_ = os.WriteFile(p, body, 0o644)
+		}
+	}
+
+	upURL := strings.TrimSuffix(prov.BaseURL, "/") + strings.TrimPrefix(r.URL.Path, "")
+	// Some clients post to /v1/chat/completions while provider base already
+	// includes /v1 — normalize by avoiding double /v1.
+	if strings.HasSuffix(prov.BaseURL, "/v1") && strings.HasPrefix(r.URL.Path, "/v1/") {
+		upURL = strings.TrimSuffix(prov.BaseURL, "/") + strings.TrimPrefix(r.URL.Path, "/v1")
+	}
+
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, upURL, strings.NewReader(string(body)))
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+prov.APIKey)
+	req.Header.Set("x-api-key", prov.APIKey) // anthropic-style providers
+	if strings.Contains(r.URL.Path, "/messages") {
+		// Anthropic wire format requires the version header.
+		v := r.Header.Get("anthropic-version")
+		if v == "" {
+			v = "2023-06-01"
+		}
+		req.Header.Set("anthropic-version", v)
+	}
+	if ua := r.Header.Get("User-Agent"); ua != "" {
+		req.Header.Set("User-Agent", ua)
+	}
+
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		http.Error(w, err.Error(), 502)
+		return
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if p := os.Getenv("ASG_DUMP_RESP"); p != "" {
+		_ = os.WriteFile(p, []byte(fmt.Sprintf("STATUS %d\nURL %s\nBODY %s", resp.StatusCode, upURL, string(respBody))), 0o644)
+	}
+
+	sessionID := r.Header.Get("x-asg-session")
+	if sessionID == "" {
+		sessionID = "probe-" + prov.Name
+	}
+	p.rep.ReportLLM(sessionID, upstreamModel, body, respBody, time.Since(start).Milliseconds())
+
+	// Copy status + content type; streaming passes through buffered (MVP).
+	ct := resp.Header.Get("Content-Type")
+	if ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
+	w.WriteHeader(resp.StatusCode)
+	w.Write(respBody)
+}
+
+// route picks the provider by model name (agent-visible name may map to a
+// different upstream id per provider config).
+func (p *llmProxy) route(body []byte) (*Provider, string) {
+	var req struct {
+		Model string `json:"model"`
+	}
+	model := ""
+	_ = jsonUnmarshal(body, &req)
+	model = req.Model
+
+	for i := range p.cfg.Providers {
+		prov := &p.cfg.Providers[i]
+		if prov.ModelMap != nil {
+			if up, ok := prov.ModelMap[model]; ok {
+				return prov, up
+			}
+		}
+		if model == "" {
+			return prov, prov.DefaultModel
+		}
+	}
+	// An explicitly requested model name is passed through verbatim to the
+	// first provider — the user chose it, we route it. Empty name falls back
+	// to the provider default.
+	if len(p.cfg.Providers) > 0 {
+		prov := &p.cfg.Providers[0]
+		up := model
+		if up == "" && prov.DefaultModel != "" {
+			up = prov.DefaultModel
+		}
+		return prov, up
+	}
+	// fallback: first provider; unknown model names map to its default so
+	// agents sending their own defaults (claude-opus-5 etc.) still work.
+	if len(p.cfg.Providers) > 0 {
+		prov := &p.cfg.Providers[0]
+		up := model
+		if prov.DefaultModel != "" {
+			up = prov.DefaultModel
+		}
+		return prov, up
+	}
+	return &Provider{Name: "none"}, model
+}
+
+// matchFamily lets agents send any model alias containing the provider tag.
+func matchFamily(model, name string) bool {
+	if name == "" {
+		return false
+	}
+	return strings.Contains(strings.ToLower(model), strings.ToLower(name))
+}
+
+var _ = context.Background
