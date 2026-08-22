@@ -31,3 +31,5 @@ last-receipt.json
 intelligence/.venv/
 /tmp/asg-sidecar.log
 bin/
+connect-events.jsonl*
+data/
