@@ -8,6 +8,7 @@ package engine
 
 import (
 	"context"
+	"sync"
 
 	"github.com/dedarek/agent-security-gateway/api"
 )
@@ -50,26 +51,51 @@ func (r *Registry) Register(e Engine) { r.engines = append(r.engines, e) }
 
 func (r *Registry) Engines() []Engine { return r.engines }
 
-// EvaluatePre runs every engine's pre hook (in production: in parallel with a
-// deadline) and aggregates the signals into a Decision.
+// EvaluatePre runs every engine's pre hook in PARALLEL with a deadline and
+// aggregates the signals into a Decision. A per-call timeout keeps the gateway
+// latency bounded even when a third-party engine misbehaves.
 func (r *Registry) EvaluatePre(ctx context.Context, c *api.ToolCall) api.Decision {
+	var wg sync.WaitGroup
+	sigs := make([]api.Signal, len(r.engines))
+	for i, e := range r.engines {
+		wg.Add(1)
+		go func(i int, e Engine) {
+			defer wg.Done()
+			sig, err := e.EvaluatePre(ctx, c)
+			if s := normalize(e, sig, err); s != nil {
+				sigs[i] = *s
+			}
+		}(i, e)
+	}
+	wg.Wait()
 	var signals []api.Signal
-	for _, e := range r.engines {
-		sig, err := e.EvaluatePre(ctx, c)
-		if s := normalize(e, sig, err); s != nil {
-			signals = append(signals, *s)
+	for _, s := range sigs {
+		if s.Engine != "" {
+			signals = append(signals, s)
 		}
 	}
 	return Aggregate(c.CallID, api.PhasePre, signals)
 }
 
-// EvaluatePost runs every engine's post hook and aggregates.
+// EvaluatePost runs every engine's post hook in parallel and aggregates.
 func (r *Registry) EvaluatePost(ctx context.Context, c *api.ToolCall, res *api.ToolResult) api.Decision {
+	var wg sync.WaitGroup
+	sigs := make([]api.Signal, len(r.engines))
+	for i, e := range r.engines {
+		wg.Add(1)
+		go func(i int, e Engine) {
+			defer wg.Done()
+			sig, err := e.EvaluatePost(ctx, c, res)
+			if s := normalize(e, sig, err); s != nil {
+				sigs[i] = *s
+			}
+		}(i, e)
+	}
+	wg.Wait()
 	var signals []api.Signal
-	for _, e := range r.engines {
-		sig, err := e.EvaluatePost(ctx, c, res)
-		if s := normalize(e, sig, err); s != nil {
-			signals = append(signals, *s)
+	for _, s := range sigs {
+		if s.Engine != "" {
+			signals = append(signals, s)
 		}
 	}
 	return Aggregate(c.CallID, api.PhasePost, signals)

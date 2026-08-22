@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -36,14 +37,19 @@ func serve(cfgPath string) error {
 	})
 	registerMCPShim(mux, cfg)
 
-	// Periodic flush so low-traffic machines still ship events.
+	// Periodic flush + retry so offline work ships when hub returns.
 	go func() {
-		for range time.Tick(10 * time.Second) {
+		backoff := 10 * time.Second
+		for range time.Tick(backoff) {
 			if err := rep.Flush(); err != nil {
 				log.Printf("[reporter] flush deferred: %v", err)
 			}
 		}
 	}()
+
+	// Registry sync: admin-curated MCP servers auto-mount to local agents.
+	stop := make(chan struct{})
+	go syncLoop(cfg, stop)
 
 	log.Printf("[asg-connect] probe listening on %s (hub=%s tenant=%s)",
 		cfg.Listen, cfg.HubURL, cfg.TenantName)
@@ -126,18 +132,48 @@ func (p *llmProxy) handleLLM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
-	if p := os.Getenv("ASG_DUMP_RESP"); p != "" {
-		_ = os.WriteFile(p, []byte(fmt.Sprintf("STATUS %d\nURL %s\nBODY %s", resp.StatusCode, upURL, string(respBody))), 0o644)
-	}
 
 	sessionID := r.Header.Get("x-asg-session")
 	if sessionID == "" {
 		sessionID = "probe-" + prov.Name
 	}
+
+	isStream := strings.Contains(resp.Header.Get("Content-Type"), "event-stream")
+
+	// Streaming responses: pipe chunks to the agent as they arrive (true
+	// pass-through, no buffering latency) while accumulating a full copy for
+	// capture. Non-streaming: buffer then forward as before.
+	var respBody []byte
+	if isStream {
+		w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+		w.WriteHeader(resp.StatusCode)
+		buf := &bytes.Buffer{}
+		chunk := make([]byte, 32*1024)
+		for {
+			n, err := resp.Body.Read(chunk)
+			if n > 0 {
+				buf.Write(chunk[:n])
+				w.Write(chunk[:n])
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+		respBody = buf.Bytes()
+		p.rep.ReportLLM(sessionID, upstreamModel, body, respBody, time.Since(start).Milliseconds())
+		return
+	}
+
+	respBody, _ = io.ReadAll(resp.Body)
+	if p := os.Getenv("ASG_DUMP_RESP"); p != "" {
+		_ = os.WriteFile(p, []byte(fmt.Sprintf("STATUS %d\nURL %s\nBODY %s", resp.StatusCode, upURL, string(respBody))), 0o644)
+	}
+
 	p.rep.ReportLLM(sessionID, upstreamModel, body, respBody, time.Since(start).Milliseconds())
 
-	// Copy status + content type; streaming passes through buffered (MVP).
 	ct := resp.Header.Get("Content-Type")
 	if ct != "" {
 		w.Header().Set("Content-Type", ct)

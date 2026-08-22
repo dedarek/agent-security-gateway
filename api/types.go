@@ -161,7 +161,9 @@ type Decision struct {
 
 // Event is the record persisted and streamed to the SOC analysis plane.
 type Event struct {
-	SessionID string
+	SessionID string `json:"session_id,omitempty"`
+	TraceID   string `json:"trace_id,omitempty"` // groups one task's LLM+tool+shell events
+	ParentID  string `json:"parent_id,omitempty"` // causal parent (e.g. the LLM call that triggered this tool)
 	Call      ToolCall
 	Result    *ToolResult
 	Decision  Decision

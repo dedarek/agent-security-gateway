@@ -39,6 +39,7 @@ import (
 	"github.com/dedarek/agent-security-gateway/internal/policyhub"
 	"github.com/dedarek/agent-security-gateway/internal/proxy"
 	"github.com/dedarek/agent-security-gateway/internal/receipt"
+	"github.com/dedarek/agent-security-gateway/internal/registry"
 	"github.com/dedarek/agent-security-gateway/internal/rulesbundle"
 	"github.com/dedarek/agent-security-gateway/internal/session"
 	"github.com/dedarek/agent-security-gateway/internal/store"
@@ -146,7 +147,14 @@ func serveCmd(args []string) {
 
 	// Operator console + Intelligence API on the same listener.
 	uiMux := http.NewServeMux()
-	webui.New(evStore, approvals, hub).Register(uiMux)
+	// Central MCP registry: probes sync from here; admins edit via API/UI.
+	mcpRegistry, err := registry.Open("./data/mcp-registry.json")
+	if err != nil {
+		log.Fatalf("registry: %v", err)
+	}
+	uiSrv := webui.New(evStore, approvals, hub)
+	uiSrv.RegisterRegistryAPI(uiMux, mcpRegistry, &webui.TenantNames{Fn: authReg.Names})
+	uiSrv.Register(uiMux)
 	go func() {
 		uiAddr := cfg.UIListen
 		if uiAddr == "" {

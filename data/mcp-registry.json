@@ -1,0 +1,11 @@
+[
+  {
+    "name": "demo-tools",
+    "command": [
+      "D:/proj/agent-security-gateway/bin/upstream-mcp.exe"
+    ],
+    "tenants": [
+      "alice"
+    ]
+  }
+]

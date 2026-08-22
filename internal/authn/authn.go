@@ -98,3 +98,14 @@ func (r *Registry) Count() int {
 	defer r.mu.RUnlock()
 	return len(r.byKey)
 }
+
+// Names lists active tenant names (registry UI / validation).
+func (r *Registry) Names() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]string, 0, len(r.byKey))
+	for _, t := range r.byKey {
+		out = append(out, t.Name)
+	}
+	return out
+}

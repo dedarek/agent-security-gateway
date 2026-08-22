@@ -23,11 +23,12 @@ type Server struct {
 	Store     *store.Store
 	Approvals *approval.Manager
 	Hub       *policyhub.Hub
+	Auth      *uiAuth
 	suggs     map[string]*intel.Suggestion
 }
 
 func New(st *store.Store, am *approval.Manager, hub *policyhub.Hub) *Server {
-	return &Server{Store: st, Approvals: am, Hub: hub, suggs: map[string]*intel.Suggestion{}}
+	return &Server{Store: st, Approvals: am, Hub: hub, Auth: newUIAuth(), suggs: map[string]*intel.Suggestion{}}
 }
 
 func (s *Server) Register(mux *http.ServeMux) {
@@ -47,6 +48,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/suggestions", s.apiSuggestions)
 	mux.HandleFunc("/api/suggestion/decide", s.apiSuggestionDecide)
 	mux.HandleFunc("/api/clusters", s.apiClusters)
+	mux.HandleFunc("/api/siem", s.apiSIEM)
+	mux.HandleFunc("/api/ui-login", s.uiLogin)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

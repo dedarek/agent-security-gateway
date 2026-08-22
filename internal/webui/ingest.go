@@ -54,6 +54,12 @@ func normalizeProbeEvent(raw map[string]any) api.Event {
 		SessionID: session,
 		Timestamp: timeNow(),
 	}
+	if t, ok := raw["trace_id"].(string); ok {
+		ev.TraceID = t
+	}
+	if p, ok := raw["parent"].(string); ok {
+		ev.ParentID = p
+	}
 	switch kind {
 	case "llm_call":
 		model, _ := raw["model"].(string)

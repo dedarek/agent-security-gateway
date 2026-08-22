@@ -103,6 +103,15 @@ async function loadApprovals(){
   const list=await j('/api/approvals');
   const box=document.getElementById('approvals');
   if(!(list&&list.length)){box.innerHTML='<div class="empty">无待审批请求</div>';return}
+  // Browser notification + title flash when new approvals appear
+  const n=list.length;
+  if(n>(window._lastApr||0)){
+    document.title=`🔴 ${n} 待审批 — ASG`;
+    if(window.Notification&&Notification.permission==='granted'){
+      new Notification('Agent Security Gateway',{body:`${n} 个操作等待你的批准`});
+    }
+  } else if(n===0){document.title='Agent Security Gateway — Console'}
+  window._lastApr=n;
   box.innerHTML='';
   list.forEach(a=>{
     const d=document.createElement('div');d.className='apr';
@@ -127,6 +136,7 @@ async function loadClusters(){
   });
 }
 loadSessions();loadTrajectory();loadApprovals();loadClusters();
+if(window.Notification&&Notification.permission==='default'){Notification.requestPermission()}
 setInterval(()=>{loadSessions();loadApprovals();loadClusters()},4000);
 </script>
 </body>
