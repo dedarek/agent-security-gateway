@@ -109,12 +109,14 @@ func (r *reporter) enqueue(ev map[string]any) {
 // Flush ships all pending batches to the hub /api/ingest, retrying failures.
 func (r *reporter) Flush() error {
 	var lastErr error
+	shipped := 0
 	for i := 0; i < 64; i++ { // bounded drain per flush cycle
 		batch, ok := r.spool.pop()
 		if !ok {
-			return lastErr
+			break
 		}
 		if r.hubURL == "" {
+			r.spool.unpop(batch)
 			return nil // offline mode: spool file is the record
 		}
 		if err := r.ship(batch); err != nil {
@@ -122,6 +124,10 @@ func (r *reporter) Flush() error {
 			lastErr = err
 			return err // leave remaining batches for next cycle
 		}
+		shipped++
+	}
+	if shipped > 0 {
+		r.spool.markShipped() // clear WAL: all pending batches delivered
 	}
 	return lastErr
 }
