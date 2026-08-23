@@ -39,3 +39,10 @@ forbid (
   action == Action::"auto_execute",
   resource == Tool::"gw.export_all_users"
 );
+
+// 演示审批流: 即使admin, 删除用户也需二次确认
+forbid (
+  principal,
+  action == Action::"auto_execute",
+  resource == Tool::"gw.delete_user"
+);
