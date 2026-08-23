@@ -71,9 +71,10 @@ cat > connect.yaml << 'EOF'
 listen: "127.0.0.1:8181"
 providers:
   - name: my-provider            # 随便起名
-    base_url: "https://api.openai.com/v1"   # 或 anthropic/zen 等
-    api_key: "sk-你自己的key"
-    default_model: "gpt-4o"       # 未识别的模型名都路由到这里
+    base_url: "https://api.openai.com/v1"   # 或 anthropic/zen/ollama 等任何兼容端点
+    api_key: "${MY_API_KEY}"      # 支持 ${ENV} 引用，key 不落盘
+    default_model: "gpt-4o"       # agent 发来未知名时路由到这里
+    allowed_models: ["gpt-4o"]    # 可选：额度锁，只放行列表内模型
 hub_url: "http://网关IP:8090"      # 中央网关
 tenant_key: "sk-发给你的key"
 tenant_name: "xiaoming"
@@ -146,5 +147,7 @@ key 只存在你自己机器的 connect.yaml 里（支持 `${ENV}` 引用），�
 探针本地缓存策略继续执法，事件落盘 spool，恢复后自动补报——监管不中断也不丢数据。
 
 **Q: 模型能用哪些？**
-探针层协议已适配 OpenAI/Anthropic 双格式。凡是你 key 能用的模型都能配；
+探针协议适配 OpenAI/Anthropic 双格式，你的 key 能用的模型都能配。
 已实测 OpenCode Zen 全系（kimi-k3 / glm-5.2 / minimax-m3 / ox-alpha-free）双协议+function calling。
+`allowed_models` 可选做额度锁：不在名单内的模型名自动重映射到 default_model，
+agent 无感、不会报错，运营者的额度也不会被意外消耗。

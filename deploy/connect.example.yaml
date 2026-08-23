@@ -1,17 +1,32 @@
 # asg-connect probe configuration (per developer machine).
-# The user configures their OWN model + key here once; agents then use any
-# model name routed by the probe. Reporting goes to the central gateway.
+# Model + key are YOURS — the probe routes whatever you configure; agents
+# keep working no matter what model names they send (unmapped names fall
+# back to default_model). allowed_models optionally locks quota.
 
 listen: "127.0.0.1:8181"
 
 providers:
-  - name: opencode-zen
-    base_url: "https://opencode.ai/zen/go/v1"
-    api_key: "${OPENCODE_GO_API_KEY}"
-    default_model: "x-preview-f-free"
+  # --- Example A: OpenAI ---
+  # - name: openai
+  #   base_url: "https://api.openai.com/v1"
+  #   api_key: "${OPENAI_API_KEY}"
+  #   default_model: "gpt-4o"
+  #
+  # --- Example B: Anthropic ---
+  # - name: anthropic
+  #   base_url: "https://api.anthropic.com/v1"
+  #   api_key: "${ANTHROPIC_API_KEY}"
+  #   default_model: "claude-sonnet-4-5"
+  #
+  # --- Example C: any OpenAI-compatible endpoint (OpenCode Zen, Ollama...) ---
+  - name: my-provider
+    base_url: "https://your-provider.example/v1"
+    api_key: "${MY_PROVIDER_KEY}"
+    default_model: "your-model-id"
+    # allowed_models: ["model-a", "model-b"]   # optional quota lock
 
-hub_url: "http://127.0.0.1:8080"   # central ASG gateway
-tenant_key: "dev-key"
-tenant_name: "local"
+hub_url: "http://gw.corp.example:8090"   # central ASG gateway
+tenant_key: "sk-key-issued-by-your-admin"
+tenant_name: "your-name"
 
 event_spool_path: "./connect-events.jsonl"

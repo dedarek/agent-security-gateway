@@ -158,8 +158,8 @@ func serveCmd(args []string) {
 	uiSrv.Register(uiMux)
 
 	// Semantica KG bridge (optional): semantic search + KG-grounded Q&A.
-	kgBridge := kgbridge.New("python",
-		"internal/kgbridge/asg_kg_worker.py", "D:/proj/semantica", 8902)
+	// Semantica KG bridge (optional): semantic search + KG-grounded Q&A.
+	kgBridge := kgbridge.New(cfg.KGPythonBin, cfg.KGWorkerScript, cfg.KGSemanticaPath, cfg.KGPort)
 	if err := kgBridge.Start(); err != nil {
 		log.Printf("[kg] semantica worker not started: %v", err)
 	} else {

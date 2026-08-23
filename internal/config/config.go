@@ -36,6 +36,12 @@ type Config struct {
 	UIListen        string        `yaml:"ui_listen"`
 	ApprovalTimeout time.Duration `yaml:"approval_timeout"`
 	TenantsPath     string        `yaml:"tenants_path"`
+
+	// Semantica KG bridge (optional; empty worker script = disabled).
+	KGPythonBin     string `yaml:"kg_python_bin"`
+	KGWorkerScript  string `yaml:"kg_worker_script"`
+	KGSemanticaPath string `yaml:"kg_semantica_path"`
+	KGPort          int    `yaml:"kg_port"`
 }
 
 // Default returns config for the MVP demo (paths relative to repo root).
@@ -51,6 +57,10 @@ func Default() Config {
 		EventLogPath:             "./data/events.jsonl",
 		UIListen:                 ":8090",
 		ApprovalTimeout:          120 * time.Second,
+		KGPythonBin:              "python",
+		KGWorkerScript:           "internal/kgbridge/asg_kg_worker.py",
+		KGSemanticaPath:          "", // set to semantica checkout if used
+		KGPort:                   8902,
 	}
 }
 

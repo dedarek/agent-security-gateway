@@ -190,12 +190,12 @@ func (p *llmProxy) handleLLM(w http.ResponseWriter, r *http.Request) {
 }
 
 // route picks the provider by model name.
-// ALLOWED MODELS: only free-tier models — paid models burn quota and are
-// rejected outright (fail-closed). Empty allowlist = first provider default.
+// allowed_models in config governs what may reach the provider. Names not on
+// the list are silently remapped to the provider default — agents never break,
+// and the operator fully controls which models may burn quota. An empty
+// allowlist means "default only".
 func (p *llmProxy) route(body []byte) (*Provider, string, error) {
-	allowed := map[string]bool{
-		"ox-alpha-free": true,
-	}
+	allowed := map[string]bool{}
 	for _, prov := range p.cfg.Providers {
 		for _, m := range prov.AllowedModels {
 			allowed[strings.ToLower(m)] = true
@@ -210,12 +210,14 @@ func (p *llmProxy) route(body []byte) (*Provider, string, error) {
 	model = req.Model
 
 	// Any model name the agent invents (claude-opus-5, gpt-4o, ...) is
-	// silently remapped to this provider's free default. The allowlist only
-	// governs what may leave the box; agents never burn paid quota.
+	// silently remapped to this provider's default. The allowlist only
+	// governs what may leave the box; agents never break, operators never
+	// burn unintended quota.
 	if model != "" && !allowed[strings.ToLower(model)] {
 		for i := range p.cfg.Providers {
 			if p.cfg.Providers[i].DefaultModel != "" {
-				model = p.cfg.Providers[i].AllowedModels[0]
+				model = p.cfg.Providers[i].DefaultModel
+				break
 			}
 		}
 	}

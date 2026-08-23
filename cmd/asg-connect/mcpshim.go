@@ -29,11 +29,7 @@ func registerMCPShim(mux *http.ServeMux, cfg *ProbeConfig) {
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/json, text/event-stream")
-		key := cfg.TenantKey
-		if key == "" {
-			key = "dev-key"
-		}
-		req.Header.Set("Authorization", "Bearer "+key)
+		req.Header.Set("Authorization", "Bearer "+cfg.TenantKey)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			http.Error(w, "gateway unreachable: "+err.Error(), 502)
