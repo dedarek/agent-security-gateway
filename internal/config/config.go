@@ -42,6 +42,11 @@ type Config struct {
 	KGWorkerScript  string `yaml:"kg_worker_script"`
 	KGSemanticaPath string `yaml:"kg_semantica_path"`
 	KGPort          int    `yaml:"kg_port"`
+
+	// Semantica Explorer (interactive graph visualization), proxied into the
+	// console at /explorer/. Empty URL = link out instead of embed.
+	ExplorerURL    string `yaml:"explorer_url"`
+	ExplorerAPIKey string `yaml:"explorer_api_key"`
 }
 
 // Default returns config for the MVP demo (paths relative to repo root).
@@ -61,6 +66,8 @@ func Default() Config {
 		KGWorkerScript:           "internal/kgbridge/asg_kg_worker.py",
 		KGSemanticaPath:          "", // set to semantica checkout if used
 		KGPort:                   8902,
+		ExplorerURL:              "http://127.0.0.1:8091",
+		ExplorerAPIKey:           "asg-explorer-key",
 	}
 }
 

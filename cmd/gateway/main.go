@@ -157,7 +157,9 @@ func serveCmd(args []string) {
 	uiSrv.RegisterRegistryAPI(uiMux, mcpRegistry, &webui.TenantNames{Fn: authReg.Names})
 	uiSrv.Register(uiMux)
 
-	// Semantica KG bridge (optional): semantic search + KG-grounded Q&A.
+	// Semantica Explorer proxied into the console (unified interface).
+	webui.RegisterExplorerProxy(uiMux, cfg.ExplorerURL, cfg.ExplorerAPIKey)
+
 	// Semantica KG bridge (optional): semantic search + KG-grounded Q&A.
 	kgBridge := kgbridge.New(cfg.KGPythonBin, cfg.KGWorkerScript, cfg.KGSemanticaPath, cfg.KGPort)
 	if err := kgBridge.Start(); err != nil {
