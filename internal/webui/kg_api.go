@@ -10,7 +10,7 @@ import (
 // RegisterKGAPI adds the knowledge-graph endpoints backed by the Semantica
 // worker: /api/kg/stats, /search (semantic), /ask (KG-grounded Q&A).
 func (s *Server) RegisterKGAPI(mux *http.ServeMux, bridge *kgbridge.Bridge) {
-	mux.HandleFunc("/api/kg/search", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/kg/search", s.Auth.middleware(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("query")
 		if q == "" {
 			http.Error(w, "missing query", 400)
@@ -22,8 +22,8 @@ func (s *Server) RegisterKGAPI(mux *http.ServeMux, bridge *kgbridge.Bridge) {
 			return
 		}
 		writeJSON(w, hits)
-	})
-	mux.HandleFunc("/api/kg/ask", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("/api/kg/ask", s.Auth.middleware(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Question string `json:"question"`
 		}
@@ -37,5 +37,5 @@ func (s *Server) RegisterKGAPI(mux *http.ServeMux, bridge *kgbridge.Bridge) {
 			return
 		}
 		writeJSON(w, map[string]string{"answer": ans})
-	})
+	}))
 }

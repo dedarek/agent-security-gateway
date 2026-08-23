@@ -11,7 +11,7 @@ import (
 // probe-facing sync endpoint (GET /api/registry/sync?tenant=name) that returns
 // the tenant's entries + content hash for change detection.
 func (s *Server) RegisterRegistryAPI(mux *http.ServeMux, reg *registry.Registry, tenants *TenantNames) {
-	mux.HandleFunc("/api/registry", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/registry", s.Auth.middleware(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			writeJSON(w, reg.List())
@@ -42,7 +42,9 @@ func (s *Server) RegisterRegistryAPI(mux *http.ServeMux, reg *registry.Registry,
 		default:
 			http.Error(w, "method", 405)
 		}
-	})
+	}))
+	// /api/registry/sync stays open (probes authenticate with tenant keys via
+	// the ingress, and the spool path is local-only).
 
 	mux.HandleFunc("/api/registry/sync", func(w http.ResponseWriter, r *http.Request) {
 		tenant := r.URL.Query().Get("tenant")

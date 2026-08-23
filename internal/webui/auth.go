@@ -58,24 +58,50 @@ func (a *uiAuth) valid(tok string) bool {
 	return true
 }
 
-// middleware wraps console handlers: token cookie or localhost bypass.
+// middleware wraps console handlers: requires a session token unless the
+// request originated from the loopback interface AND no tunnel is involved.
+// When ASG_PUBLIC=1 (or a forwarded header is present), even loopback must
+// authenticate — cpolar/ngrok-style tunnels make loopback the public entry.
 func (a *uiAuth) middleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		host := r.Host
-		if i := strings.LastIndex(host, ":"); i > 0 {
-			host = host[:i]
-		}
-		if host == "127.0.0.1" || host == "localhost" {
+		if !a.isLocalOnly(r) {
+			ck, err := r.Cookie("asg_session")
+			if err != nil || !a.valid(ck.Value) {
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.WriteHeader(401)
+				w.Write([]byte(loginPageHTML))
+				return
+			}
 			next(w, r)
 			return
 		}
-		ck, err := r.Cookie("asg_session")
-		if err != nil || !a.valid(ck.Value) {
-			http.Error(w, "unauthorized — login at /login", 401)
-			return
+		// local-only mode: still allow, but honor explicit public flag
+		if os.Getenv("ASG_PUBLIC") == "1" {
+			ck, err := r.Cookie("asg_session")
+			if err != nil || !a.valid(ck.Value) {
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.WriteHeader(401)
+				w.Write([]byte(loginPageHTML))
+				return
+			}
 		}
 		next(w, r)
 	}
+}
+
+// isLocalOnly reports whether this request is genuinely from the local
+// console and NOT through a tunnel (tunnels present forwarding headers).
+func (a *uiAuth) isLocalOnly(r *http.Request) bool {
+	if r.Header.Get("X-Forwarded-For") != "" || r.Header.Get("X-Real-IP") != "" ||
+		strings.HasPrefix(r.Host, "cpolar") || strings.Contains(r.Host, ".cpolar.") ||
+		strings.Contains(r.Host, ".vip.cpolar.cn") {
+		return false // tunneled: require auth regardless of apparent host
+	}
+	host := r.Host
+	if i := strings.LastIndex(host, ":"); i > 0 {
+		host = host[:i]
+	}
+	return host == "127.0.0.1" || host == "localhost"
 }
 
 func (s *Server) uiLogin(w http.ResponseWriter, r *http.Request) {
@@ -99,3 +125,31 @@ func (s *Server) uiLogin(w http.ResponseWriter, r *http.Request) {
 		Path: "/", HttpOnly: true, MaxAge: 86400})
 	writeJSON(w, map[string]bool{"ok": true})
 }
+
+
+const loginPageHTML = `<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><title>ASG 登录</title>
+<style>
+body{background:#0d1117;color:#e6edf3;font-family:system-ui,sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}
+.box{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:32px;width:320px}
+h1{font-size:16px;margin:0 0 16px}
+input{width:100%;box-sizing:border-box;background:#0a0e14;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:8px 12px;font-size:14px}
+button{width:100%;margin-top:12px;background:#238636;border:none;color:#fff;border-radius:6px;padding:8px;font-size:14px;font-weight:600;cursor:pointer}
+.err{color:#f85149;font-size:12px;margin-top:8px;min-height:16px}
+</style></head><body><div class="box">
+<h1>🛡 Agent Security Gateway</h1>
+<form onsubmit="return doLogin()">
+<input type="password" id="pw" placeholder="管理员密码" autofocus>
+<div class="err" id="err"></div>
+<button type="submit">登 录</button>
+</form></div>
+<script>
+async function doLogin(){
+  const pw=document.getElementById('pw').value;
+  const r=await fetch('/api/ui-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})});
+  if(r.ok){location.reload();return false}
+  document.getElementById('err').textContent='密码错误';
+  return false;
+}
+document.getElementById('pw').focus();
+</script></body></html>`
