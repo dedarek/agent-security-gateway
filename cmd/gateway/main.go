@@ -35,6 +35,7 @@ import (
 	"github.com/dedarek/agent-security-gateway/internal/config"
 	"github.com/dedarek/agent-security-gateway/internal/engine"
 	"github.com/dedarek/agent-security-gateway/internal/ingress"
+	"github.com/dedarek/agent-security-gateway/internal/kgbridge"
 	"github.com/dedarek/agent-security-gateway/internal/mcpproxy"
 	"github.com/dedarek/agent-security-gateway/internal/policyhub"
 	"github.com/dedarek/agent-security-gateway/internal/proxy"
@@ -155,6 +156,16 @@ func serveCmd(args []string) {
 	uiSrv := webui.New(evStore, approvals, hub)
 	uiSrv.RegisterRegistryAPI(uiMux, mcpRegistry, &webui.TenantNames{Fn: authReg.Names})
 	uiSrv.Register(uiMux)
+
+	// Semantica KG bridge (optional): semantic search + KG-grounded Q&A.
+	kgBridge := kgbridge.New("python",
+		"internal/kgbridge/asg_kg_worker.py", "D:/proj/semantica", 8902)
+	if err := kgBridge.Start(); err != nil {
+		log.Printf("[kg] semantica worker not started: %v", err)
+	} else {
+		uiSrv.RegisterKGAPI(uiMux, kgBridge)
+		log.Printf("[kg] semantica worker on :8902")
+	}
 	go func() {
 		uiAddr := cfg.UIListen
 		if uiAddr == "" {

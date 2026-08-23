@@ -1,0 +1,8 @@
+# Semantica (open-source Palantir) — KG/provenance/embeddings/reasoning
+# vendored as a pip dependency; security-data-specific modules stay ours.
+semantica>=0.3
+networkx
+rdflib
+fastembed
+litellm
+numpy

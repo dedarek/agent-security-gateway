@@ -51,6 +51,13 @@ button:hover{filter:brightness(1.15)}
       <h2>Attack clusters (cross-session)</h2>
       <div id="clusters"><div class="empty">暂无聚类</div></div>
     </div>
+    <div class="panel" style="margin-top:16px">
+      <h2>Knowledge graph — 语义检索 & 图谱问答</h2>
+      <input id="kgq" placeholder="例如: email exfiltration to attacker" style="width:100%;background:#0a0e14;border:1px solid var(--border);color:var(--fg);border-radius:6px;padding:6px 10px;margin-bottom:8px">
+      <button onclick="kgSearch()">🔍 语义检索</button>
+      <button class="ghost" onclick="kgAsk()">💬 问图谱</button>
+      <div id="kgout" style="margin-top:10px;font-size:12px;white-space:pre-wrap;color:var(--dim)"></div>
+    </div>
   </div>
   <div class="panel">
     <h2>Trajectory & root cause</h2>
@@ -134,6 +141,18 @@ async function loadClusters(){
     d.innerHTML=`<div><b>×${c.count}</b> ${c.pattern}<div style="color:var(--dim);font-size:12px">${c.source_tool||'?'} → ${c.blocked_tool} · ${c.sessions.join(', ')}</div></div>`;
     box.appendChild(d);
   });
+}
+async function kgSearch(){
+  const q=document.getElementById('kgq').value; if(!q)return;
+  const hits=await j('/api/kg/search?query='+encodeURIComponent(q));
+  document.getElementById('kgout').textContent=(hits||[]).map(h=>h.score.toFixed(3)+' '+h.text).join('
+')||'无结果';
+}
+async function kgAsk(){
+  const q=document.getElementById('kgq').value; if(!q)return;
+  document.getElementById('kgout').textContent='thinking...';
+  const r=await j('/api/kg/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})});
+  document.getElementById('kgout').textContent=r.answer||'';
 }
 loadSessions();loadTrajectory();loadApprovals();loadClusters();
 if(window.Notification&&Notification.permission==='default'){Notification.requestPermission()}
