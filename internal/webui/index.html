@@ -52,7 +52,13 @@ button:hover{filter:brightness(1.15)}
       <div id="clusters"><div class="empty">暂无聚类</div></div>
     </div>
     <div class="panel" style="margin-top:16px">
-      <h2>Knowledge graph — 语义检索 & 图谱问答</h2>
+      <h2>Knowledge graph</h2>
+      <div style="margin-bottom:10px">
+        <a href="http://127.0.0.1:8091" target="_blank" style="color:var(--accent);font-size:13px">
+          🌐 打开完整图谱可视化 (Semantica Explorer — 交互式血缘图/决策链/时序回放)
+        </a>
+      </div>
+      <h2>语义检索 & 图谱问答</h2>
       <input id="kgq" placeholder="例如: email exfiltration to attacker" style="width:100%;background:#0a0e14;border:1px solid var(--border);color:var(--fg);border-radius:6px;padding:6px 10px;margin-bottom:8px">
       <button onclick="kgSearch()">🔍 语义检索</button>
       <button class="ghost" onclick="kgAsk()">💬 问图谱</button>
