@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/dedarek/agent-security-gateway/api"
@@ -63,6 +64,22 @@ func (s *Store) Write(ev api.Event) error {
 		}
 	}
 	return nil
+}
+
+// Query filters events by optional criteria.
+func (s *Store) Query(sessionID, toolID, verdict string, limit int) []api.Event {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if limit <= 0 { limit = 100 }
+	var out []api.Event
+	for i := len(s.events) - 1; i >= 0 && len(out) < limit; i-- {
+		e := s.events[i]
+		if sessionID != "" && e.SessionID != sessionID { continue }
+		if toolID != "" && !strings.Contains(e.Call.ToolID, toolID) { continue }
+		if verdict != "" && e.Decision.Final.String() != verdict { continue }
+		out = append(out, e)
+	}
+	return out
 }
 
 // Recent returns up to n newest events (newest first).

@@ -28,6 +28,7 @@ type Gate struct {
 
 // dangerous patterns — deterministic local rules, always BLOCK.
 var dangerous = []*regexp.Regexp{
+	// --- Linux/macOS ---
 	regexp.MustCompile(`(?i)\brm\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\b`),
 	regexp.MustCompile(`(?i)\bdrop\s+(table|database)\b`),
 	regexp.MustCompile(`(?i)\bshutdown\b`),
@@ -35,10 +36,21 @@ var dangerous = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bmkfs\b`),
 	regexp.MustCompile(`(?i)\bformat\s+[a-z]:`),
 	regexp.MustCompile(`(?i)\bchmod\s+777\s+/`),
-	regexp.MustCompile(`(?i)Remove-Item\s+.*-Recurse.*-Force`),
-	regexp.MustCompile(`(?i)rd\s+/s\s+/q`),
-	regexp.MustCompile(`(?i)rmdir\s+/s\s+/q`),
-	regexp.MustCompile(`(?i)format\s+[a-zA-Z]:`),
+	// --- Windows / PowerShell ---
+	regexp.MustCompile(`(?i)Remove-Item\s+.*(-Recurse|-Force)`),
+	regexp.MustCompile(`(?i)\brd\s+/s\s+/q`),
+	regexp.MustCompile(`(?i)\brmdir\s+/s\s+/q`),
+	regexp.MustCompile(`(?i)\bformat\s+[a-zA-Z]:`),
+	// PowerShell-specific dangerous operations
+	regexp.MustCompile(`(?i)Set-ExecutionPolicy\s+(Bypass|Unrestricted)`),
+	regexp.MustCompile(`(?i)Invoke-Expression\b`),
+	regexp.MustCompile(`(?i)\biex\b`), // iex alias for Invoke-Expression
+	regexp.MustCompile(`(?i)Start-Process\s+.*-Verb\s+RunAs`),
+	regexp.MustCompile(`(?i)Invoke-WebRequest\s+.*-OutFile`), // download payload
+	regexp.MustCompile(`(?i)DownloadString\s*\(`),            // common in PS attacks
+	regexp.MustCompile(`(?i)Net-WebClient`),                  // WebClient download
+	regexp.MustCompile(`(?i)\bnet\s+user\s+\w+\s+/add`),      // add user
+	regexp.MustCompile(`(?i)\bnet\s+localgroup\s+administrators`), // escalate to admin
 }
 
 // secret patterns — REDACT candidates when a command would ship them out.

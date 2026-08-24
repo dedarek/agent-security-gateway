@@ -33,13 +33,20 @@ func New(st *store.Store, am *approval.Manager, hub *policyhub.Hub) *Server {
 
 func (s *Server) Register(mux *http.ServeMux) {
 	s.RegisterIngest(mux)
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/", s.Auth.middleware(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
 		}
+		// If not authenticated, serve login page instead of console
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(page)
+	}))
+	// Login page endpoint (GET returns HTML, POST processes login)
+	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(200)
+		w.Write([]byte(loginPageHTML))
 	})
 	mux.HandleFunc("/api/events", s.Auth.middleware(s.apiEvents))
 	mux.HandleFunc("/api/sessions", s.Auth.middleware(s.apiSessions))
@@ -49,6 +56,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/suggestion/decide", s.Auth.middleware(s.apiSuggestionDecide))
 	mux.HandleFunc("/api/clusters", s.Auth.middleware(s.apiClusters))
 	mux.HandleFunc("/api/siem", s.Auth.middleware(s.apiSIEM))
+	mux.HandleFunc("/api/query", s.Auth.middleware(s.apiQuery))
 	mux.HandleFunc("/api/ui-login", s.uiLogin)
 }
 
