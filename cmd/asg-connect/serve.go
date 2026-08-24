@@ -36,6 +36,7 @@ func serve(cfgPath string) error {
 		w.Write([]byte("ok"))
 	})
 	registerMCPShim(mux, cfg)
+	mux.HandleFunc("/api/hook-check", hookHTTPHandler(cfg, rep))
 
 	// Periodic flush + retry so offline work ships when hub returns.
 	go func() {

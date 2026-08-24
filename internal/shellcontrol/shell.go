@@ -35,6 +35,10 @@ var dangerous = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bmkfs\b`),
 	regexp.MustCompile(`(?i)\bformat\s+[a-z]:`),
 	regexp.MustCompile(`(?i)\bchmod\s+777\s+/`),
+	regexp.MustCompile(`(?i)Remove-Item\s+.*-Recurse.*-Force`),
+	regexp.MustCompile(`(?i)rd\s+/s\s+/q`),
+	regexp.MustCompile(`(?i)rmdir\s+/s\s+/q`),
+	regexp.MustCompile(`(?i)format\s+[a-zA-Z]:`),
 }
 
 // secret patterns — REDACT candidates when a command would ship them out.
