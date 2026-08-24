@@ -80,6 +80,14 @@ def _search(payload):
     return {"hits": hits}
 
 
+def _embed(payload):
+    texts = payload.get("texts") or []
+    if not EMBEDDER:
+        return {"vectors": []}
+    vecs = EMBEDDER.embed_batch(texts) if texts else []
+    return {"vectors": [list(v) for v in vecs]}
+
+
 def _ask(payload):
     q = payload.get("question", "")
     kg_ctx = json.dumps({"entities": KG_ENTITIES[-40:], "relationships": KG_RELATIONSHIPS[-40:]},
@@ -127,6 +135,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, _search(payload))
             elif self.path == "/ask":
                 self._json(200, _ask(payload))
+            elif self.path == "/embed":
+                self._json(200, _embed(payload))
             else:
                 self._json(404, {"error": "not found"})
         except Exception as e:

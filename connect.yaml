@@ -1,15 +1,23 @@
 # asg-connect probe — 本机开发配置
+# 实时判定(inline)用 Lenovo qwen35 (快速+免费)
+# 事后分析(async)可以放宽到任何模型
+
 listen: "127.0.0.1:8181"
 
 providers:
-  - name: opencode-zen
-    base_url: "https://opencode.ai/zen/go/v1"
-    api_key: "${OPENCODE_GO_API_KEY}"
-    default_model: "ox-alpha-free"
-    allowed_models: ["ox-alpha-free"]
+  - name: lenovo-qwen
+    base_url: "https://aicloud-app.lenovo.com.cn/qwen35-122b-a10b-fp8/v1"
+    api_key: "eyJhbGciOiJIUzUxMiJ9.eyJtb2RlbElkIjo3LCJ0ZW5hbnRJZCI6ODgsInNlcnZpY2VOYW1lIjoicXdlbjI1LTE0Yi1maW5vcHMiLCJleHAiOjE3MzMxMjU2NzYsImlhdCI6MTczMzExODQ3Nn0.tQim_4fGgdwhYE1lvds1bhEZavLkVoqpXPAQ0f4JoyZkfUbzY-HMilnn675YywNcNcl3-721h8vtEQfPqheJTg"
+    default_model: "qwen35-122b-a10b-fp8"
+    allowed_models: ["qwen35-122b-a10b-fp8"]
 
-hub_url: "http://127.0.0.1:8090"   # central ASG gateway (ingest lives on the UI/API listener)
+hub_url: "http://127.0.0.1:8090"
 tenant_key: "dev-key"
 tenant_name: "local"
 
 event_spool_path: "./connect-events.jsonl"
+
+# 语义扫描 LLM 后端: inline 用同一个免费快模型, max_tokens 限制到最小
+semantic:
+  llm_max_tokens: 100       # inline 判定要快, 只需要 YES/NO + 一句话理由
+  async_llm_max_tokens: 0   # 0 = 不限 (事后分析模式)

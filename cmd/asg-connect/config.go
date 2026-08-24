@@ -36,6 +36,12 @@ type ProbeConfig struct {
 	// Local policy pack cache (synced from hub; offline enforcement).
 	PolicyCachePath string `yaml:"policy_cache_path"`
 	EventSpoolPath  string `yaml:"event_spool_path"`
+
+	// Semantic scanner LLM settings.
+	Semantic struct {
+		LLMMaxTokens      int `yaml:"llm_max_tokens"`       // inline: keep small for speed
+		AsyncLLMMaxTokens int `yaml:"async_llm_max_tokens"` // 0 = unlimited (post-hoc)
+	} `yaml:"semantic"`
 }
 
 type Provider struct {
