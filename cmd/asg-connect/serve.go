@@ -29,7 +29,7 @@ func serve(cfgPath string) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/", p.handleLLM)
-	mux.HandleFunc("/v1/messages", p.handleLLM)     // anthropic style (also under /v1/)
+	mux.HandleFunc("/v1/messages", p.handleAnthropicBridge) // anthropic→openai bridge
 	mux.HandleFunc("/v1/responses", p.handleResponses) // OpenAI Responses API (Codex)
 	mux.HandleFunc("/responses", p.handleResponses)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {

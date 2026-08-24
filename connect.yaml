@@ -12,7 +12,7 @@ providers:
     allowed_models: ["qwen35-122b-a10b-fp8"]
 
 hub_url: "http://127.0.0.1:8090"
-tenant_key: "dev-key"
+tenant_key: "sk-alice-demo-key"
 tenant_name: "local"
 
 event_spool_path: "./connect-events.jsonl"
