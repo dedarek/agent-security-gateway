@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -266,7 +265,6 @@ func matchFamily(model, name string) bool {
 	return strings.Contains(strings.ToLower(model), strings.ToLower(name))
 }
 
-var _ = context.Background
 
 func jsonQuote(s string) string {
 	b, _ := json.Marshal(s)

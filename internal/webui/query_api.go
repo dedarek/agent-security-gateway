@@ -1,22 +1,29 @@
 package webui
 
-import "net/http"
+import (
+	"encoding/json"
+	"net/http"
+	"strconv"
 
-// apiQuery handles filtered event queries: /api/query?session=&tool=&verdict=&limit=
+	"github.com/dedarek/agent-security-gateway/internal/store"
+)
+
+// apiQuery handles filtered event queries: /api/query?session=&tool=&verdict=&limit=&offset=
 func (s *Server) apiQuery(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	writeJSON(w, s.Store.Query(
-		q.Get("session"), q.Get("tool"), q.Get("verdict"),
-		atoiDefault(q.Get("limit"), 100),
-	))
-}
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	limit, _ := strconv.Atoi(q.Get("limit"))
 
-func atoiDefault(s string, def int) int {
-	n := 0
-	for _, c := range s {
-		if c < '0' || c > '9' { return def }
-		n = n*10 + int(c-'0')
-	}
-	if n == 0 { return def }
-	return n
+	events, total := s.Store.Query(store.QueryFilter{
+		SessionID: q.Get("session"),
+		ToolID:    q.Get("tool"),
+		Verdict:   q.Get("verdict"),
+		Offset:    offset,
+		Limit:     limit,
+	})
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"total":   total,
+		"events":  events,
+	})
 }

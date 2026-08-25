@@ -131,6 +131,12 @@ func (p *llmProxy) handleAnthropicBridge(w http.ResponseWriter, r *http.Request)
 	stopReason := "end_turn"
 	if len(toolUse) > 0 { stopReason = "tool_use" }
 
+	// If the client requested streaming, synthesize Anthropic SSE events.
+	if req.Stream {
+		anthropicSSE(w, upstreamModel, content, toolUse)
+		return
+	}
+
 	out := map[string]any{
 		"id":            "msg_" + fmt.Sprintf("%d", time.Now().UnixNano()),
 		"type":          "message",

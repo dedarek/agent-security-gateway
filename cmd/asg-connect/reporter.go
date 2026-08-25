@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dedarek/agent-security-gateway/api"
 )
 
 // traceID returns a stable per-session task id, rotated when the session goes
@@ -52,6 +51,25 @@ type reporter struct {
 	lastLLMCall map[string]string
 }
 
+
+// getOrCreateTraceLocked must be called with r.mu held.
+func (r *reporter) getOrCreateTraceLocked(session string) string {
+	now := time.Now()
+	if t, ok := r.traces[session]; ok && now.Sub(r.lastSeen[session]) < 30*time.Minute {
+		r.lastSeen[session] = now
+		return t
+	}
+	t := "trace-" + session + "-" + now.Format("0102-150405")
+	r.traces[session] = t
+	r.lastSeen[session] = now
+	return t
+}
+
+// lastLLMLocked must be called with r.mu held.
+func (r *reporter) lastLLMLocked(session string) string {
+	return r.lastLLMCall[session]
+}
+
 func newReporter(hubURL, key, spoolPath string) *reporter {
 	return &reporter{
 		hubURL:      hubURL,
@@ -66,33 +84,44 @@ func newReporter(hubURL, key, spoolPath string) *reporter {
 
 // ReportLLM records one model call (prompt+response metadata + content).
 func (r *reporter) ReportLLM(sessionID, model string, reqBody, respBody []byte, ms int64) {
+	// Atomically get trace ID and update last LLM call in one lock scope.
+	r.mu.Lock()
+	traceID := r.getOrCreateTraceLocked(sessionID)
+	llmCallID := fmt.Sprintf("llm-%d", time.Now().UnixNano())
+	r.lastLLMCall[sessionID] = llmCallID
+	r.mu.Unlock()
+
 	ev := map[string]any{
 		"kind":        "llm_call",
 		"session":     sessionID,
-		"trace_id":    r.traceID(sessionID),
+		"trace_id":    traceID,
+		"parent_id":   llmCallID,
 		"model":       model,
 		"duration_ms": ms,
-		// Store full content: the Intelligence plane replays thoughts.
-		"request":  jsonRaw(reqBody),
-		"response": jsonRaw(respBody),
+		"request":     jsonRaw(reqBody),
+		"response":    jsonRaw(respBody),
 	}
-	r.mu.Lock()
-	r.lastLLMCall[sessionID] = fmt.Sprintf("llm-%d", time.Now().UnixNano())
-	r.mu.Unlock()
 	r.enqueue(ev)
 }
 
 // ReportTool records one tool/command execution and its local verdict.
 func (r *reporter) ReportTool(sessionID, toolID string, args []byte, verdict string, reason string) {
+	// Atomically read trace and parent in one lock scope (fixes race condition
+	// where concurrent ReportLLM could change lastLLMCall between the two reads).
+	r.mu.Lock()
+	traceID := r.getOrCreateTraceLocked(sessionID)
+	parent := r.lastLLMCall[sessionID]
+	r.mu.Unlock()
+
 	ev := map[string]any{
-		"kind":     "tool_call",
-		"session":  sessionID,
-		"trace_id": r.traceID(sessionID),
-		"parent":   r.lastLLM(sessionID), // causal link: which LLM call led here
-		"tool":     toolID,
-		"args":     jsonRaw(args),
-		"verdict":  verdict,
-		"reason":   reason,
+		"kind":      "tool_call",
+		"session":   sessionID,
+		"trace_id":  traceID,
+		"parent_id": parent,
+		"tool":      toolID,
+		"args":      jsonRaw(args),
+		"verdict":   verdict,
+		"reason":    reason,
 	}
 	r.enqueue(ev)
 }
@@ -194,4 +223,3 @@ var logFatalf = logPrintf
 
 func jsonRaw(b []byte) json.RawMessage { return json.RawMessage(b) }
 
-var _ = api.VerdictAllow

@@ -66,20 +66,47 @@ func (s *Store) Write(ev api.Event) error {
 	return nil
 }
 
-// Query filters events by optional criteria.
-func (s *Store) Query(sessionID, toolID, verdict string, limit int) []api.Event {
+// QueryFilter holds optional filter criteria for event queries.
+type QueryFilter struct {
+	SessionID string
+	ToolID    string // substring match
+	Verdict   string // exact match: ALLOW|BLOCK|REDACT|CONFIRM
+	Offset    int
+	Limit     int
+}
+
+// Query filters events with pagination. Returns matching events + total count.
+func (s *Store) Query(f QueryFilter) ([]api.Event, int) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if limit <= 0 { limit = 100 }
-	var out []api.Event
-	for i := len(s.events) - 1; i >= 0 && len(out) < limit; i-- {
-		e := s.events[i]
-		if sessionID != "" && e.SessionID != sessionID { continue }
-		if toolID != "" && !strings.Contains(e.Call.ToolID, toolID) { continue }
-		if verdict != "" && e.Decision.Final.String() != verdict { continue }
-		out = append(out, e)
+
+	var matched []int // indices into s.events
+	for i := len(s.events) - 1; i >= 0; i-- { // newest first
+		e := &s.events[i]
+		if f.SessionID != "" && e.SessionID != f.SessionID {
+			continue
+		}
+		if f.ToolID != "" && !strings.Contains(strings.ToLower(e.Call.ToolID), strings.ToLower(f.ToolID)) {
+			continue
+		}
+		if f.Verdict != "" && e.Decision.Final.String() != f.Verdict {
+			continue
+		}
+		matched = append(matched, i)
 	}
-	return out
+
+	total := len(matched)
+	offset := f.Offset
+	limit := f.Limit
+	if limit <= 0 { limit = 50 }
+
+	var out []api.Event
+	for idx, i := range matched {
+		if idx < offset { continue }
+		if len(out) >= limit { break }
+		out = append(out, s.events[i])
+	}
+	return out, total
 }
 
 // Recent returns up to n newest events (newest first).
