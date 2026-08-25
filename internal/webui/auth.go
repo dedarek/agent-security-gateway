@@ -67,9 +67,15 @@ func (a *uiAuth) middleware(next http.HandlerFunc) http.HandlerFunc {
 		if !a.isLocalOnly(r) {
 			ck, err := r.Cookie("asg_session")
 			if err != nil || !a.valid(ck.Value) {
-				w.Header().Set("Content-Type", "text/html; charset=utf-8")
-				w.WriteHeader(401)
-				w.Write([]byte(loginPageHTML))
+				if strings.HasPrefix(r.URL.Path, "/api/") {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(401)
+					json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+				} else {
+					w.Header().Set("Content-Type", "text/html; charset=utf-8")
+					w.WriteHeader(401)
+					w.Write([]byte(loginPageHTML))
+				}
 				return
 			}
 			next(w, r)

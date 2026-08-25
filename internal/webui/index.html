@@ -59,7 +59,30 @@ body{background:var(--bg);color:var(--fg);font:14px/1.4 Inter,system-ui,-apple-s
 </div>
 <script>
 const $=id=>document.getElementById(id);
-async function j(u,o){try{return await fetch(u,o).then(r=>r.json())}catch(e){return null}}
+window.onerror=function(m,u,l){console.error('JS Error:',m,'line',l)};
+async function j(url,opt){
+  try{
+    const r=await fetch(url,{...opt,credentials:'include'});
+    if(r.status===401){
+      document.body.innerHTML=`<div style="display:flex;justify-content:center;align-items:center;height:100vh;background:#0b0f19">
+        <div style="background:#161b22;border:1px solid #334155;border-radius:10px;padding:32px;width:320px;text-align:center">
+          <h2 style="color:#f1f5f9;font-size:16px;margin-bottom:16px">🛡 ASG Login</h2>
+          <input type="password" id="pw" placeholder="Password" style="width:100%;box-sizing:border-box;background:#0a0e14;border:1px solid #334155;color:#f1f5f9;border-radius:6px;padding:8px 12px;margin-bottom:8px">
+          <button onclick="doLogin()" style="width:100%;background:#238636;color:#fff;border:none;border-radius:6px;padding:8px;font-weight:600;cursor:pointer">Login</button>
+          <div id="err" style="color:#ef4444;font-size:12px;margin-top:8px"></div>
+        </div></div>`;
+      window.doLogin=async function(){
+        const pw=document.getElementById('pw').value;
+        const r=await fetch('/api/ui-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})});
+        if(r.ok)location.reload();
+        else document.getElementById('err').textContent='Wrong password';
+      };
+      return null;
+    }
+    if(!r.ok){console.error('API error:',url,r.status);return null}
+    return await r.json();
+  }catch(e){console.error('fetch failed:',url,e);return null}
+}
 let sel=null,lastApr=0;
 
 async function loadStats(){
@@ -123,6 +146,7 @@ async function kgA(){
   const r=await j('/api/kg/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})});
   $('kgo').innerHTML=r?.answer?`<div style="background:rgba(168,85,247,.08);border:1px solid rgba(168,85,247,.2);border-radius:6px;padding:8px;font-size:12px">${r.answer}</div>`:'';
 }
+.then(()=>{console.log('initial load complete')});
 Promise.all([loadStats(),loadSS(),loadApr(),loadClu()]);
 setInterval(()=>{loadStats();loadApr();loadClu()},4000);
 setInterval(()=>{$('clock').textContent=new Date().toLocaleTimeString()},1000);
