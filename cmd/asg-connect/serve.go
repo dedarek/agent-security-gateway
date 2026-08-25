@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/dedarek/agent-security-gateway/internal/outputsafety"
 )
 
 func osOpenAppend(path string) (*os.File, error) {
@@ -25,6 +27,13 @@ func serve(cfgPath string) error {
 	}
 	rep := newReporter(cfg.HubURL, cfg.TenantKey, cfg.EventSpoolPath)
 	p := &llmProxy{cfg: cfg, rep: rep}
+
+	// Initialize semantic scanner (LLM-powered output analysis)
+	if len(cfg.Providers) > 0 {
+		prov := cfg.Providers[0]
+		outputsafety.InitSemantic(prov.BaseURL, prov.APIKey, 100)
+		log.Printf("[outputsafety] semantic scanner initialized")
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/", p.handleLLM)
@@ -180,6 +189,47 @@ func (p *llmProxy) handleLLM(w http.ResponseWriter, r *http.Request) {
 	}
 
 	p.rep.ReportLLM(sessionID, upstreamModel, body, respBody, time.Since(start).Milliseconds())
+
+	// Semantic output safety scan (O1): scan LLM response for harmful content.
+	// Only for non-streaming; streaming responses are scanned post-hoc by the Intelligence plane.
+	if resp.StatusCode == 200 {
+		go func() {
+			defer func() { recover() }()
+			// Extract text content from OpenAI-format response
+			var cc struct {
+				Choices []struct {
+					Message struct { Content string `json:"content"` } `json:"message"`
+				} `json:"choices"`
+			}
+			if json.Unmarshal(respBody, &cc) == nil && len(cc.Choices) > 0 {
+				outputText := cc.Choices[0].Message.Content
+				if outputText != "" {
+					// Extract user task from request
+					var reqObj struct {
+						Messages []struct {
+							Role    string `json:"role"`
+							Content any    `json:"content"`
+						} `json:"messages"`
+					}
+					json.Unmarshal(body, &reqObj)
+					userTask := ""
+					for _, m := range reqObj.Messages {
+						if m.Role == "user" {
+							if s, ok := m.Content.(string); ok { userTask = s }
+							break
+						}
+					}
+					sr := outputsafety.ScanSemantic(outputText, userTask, "http://127.0.0.1:8902")
+					if sr.Suspicious {
+						log.Printf("[outputsafety] SEMANTIC %s: %s", sr.FinalVerdict, sr.Detail)
+						p.rep.ReportTool(sessionID, "semantic_scan", 
+							[]byte(fmt.Sprintf(`{"verdict":"%s","detail":"%s"}`, sr.FinalVerdict, sr.Detail)),
+							sr.FinalVerdict, sr.Detail)
+					}
+				}
+			}
+		}()
+	}
 
 	ct := resp.Header.Get("Content-Type")
 	if ct != "" {

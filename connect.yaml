@@ -15,12 +15,12 @@ providers:
       "claude-opus-5": "ox-alpha-free"
       "claude-sonnet-4": "ox-alpha-free"
   - name: lenovo-qwen
-    base_url: "https://aicloud-app.lenovo.com.cn/qwen35-122b-a10b-fp8/v1"
+    base_url: "https://aicloud-app.lenovo.com.cn/qwen38-27b/v1"
     api_key: "eyJhbGciOiJIUzUxMiJ9.eyJtb2RlbElkIjo3LCJ0ZW5hbnRJZCI6ODgsInNlcnZpY2VOYW1lIjoicXdlbjI1LTE0Yi1maW5vcHMiLCJleHAiOjE3MzMxMjU2NzYsImlhdCI6MTczMzExODQ3Nn0.tQim_4fGgdwhYE1lvds1bhEZavLkVoqpXPAQ0f4JoyZkfUbzY-HMilnn675YywNcNcl3-721h8vtEQfPqheJTg"
-    default_model: "qwen35-122b-a10b-fp8"
-    allowed_models: ["qwen35-122b-a10b-fp8"]
+    default_model: "qwen38-27b"
+    allowed_models: ["qwen38-27b"]
     model_map:
-      "qwen35-122b-a10b-fp8": "qwen35-122b-a10b-fp8"
+      "qwen38-27b": "qwen38-27b"
 
 hub_url: "http://127.0.0.1:8090"
 tenant_key: "sk-alice-demo-key"

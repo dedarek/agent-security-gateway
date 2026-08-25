@@ -35,6 +35,7 @@ import (
 	"github.com/dedarek/agent-security-gateway/internal/config"
 	"github.com/dedarek/agent-security-gateway/internal/engine"
 	"github.com/dedarek/agent-security-gateway/internal/ingress"
+	"github.com/dedarek/agent-security-gateway/internal/judge"
 	"github.com/dedarek/agent-security-gateway/internal/kgbridge"
 	"github.com/dedarek/agent-security-gateway/internal/mcpproxy"
 	"github.com/dedarek/agent-security-gateway/internal/policyhub"
@@ -168,6 +169,10 @@ func serveCmd(args []string) {
 		uiSrv.RegisterKGAPI(uiMux, kgBridge)
 		log.Printf("[kg] semantica worker on :8902")
 	}
+
+	// LLM-as-Judge: async review of high-risk trajectories using free model.
+	_ = judge.New("http://127.0.0.1:8181", "dummy")
+	log.Printf("[judge] LLM-as-Judge initialized (model via probe)")
 	go func() {
 		uiAddr := cfg.UIListen
 		if uiAddr == "" {
