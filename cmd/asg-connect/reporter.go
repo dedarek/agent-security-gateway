@@ -44,11 +44,12 @@ type reporter struct {
 	key    string
 	client *http.Client
 
-	mu        sync.Mutex
-	spool     *spoolStore
-	traces    map[string]string
-	lastSeen  map[string]time.Time
+	mu          sync.Mutex
+	spool       *spoolStore
+	traces      map[string]string
+	lastSeen    map[string]time.Time
 	lastLLMCall map[string]string
+	tenantName  string
 }
 
 
@@ -70,8 +71,8 @@ func (r *reporter) lastLLMLocked(session string) string {
 	return r.lastLLMCall[session]
 }
 
-func newReporter(hubURL, key, spoolPath string) *reporter {
-	return &reporter{
+func newReporter(hubURL, key, spoolPath, tenantName string) *reporter {
+	r := &reporter{
 		hubURL:      hubURL,
 		key:         key,
 		client:      &http.Client{Timeout: 10 * time.Second},
@@ -79,7 +80,9 @@ func newReporter(hubURL, key, spoolPath string) *reporter {
 		traces:      map[string]string{},
 		lastSeen:    map[string]time.Time{},
 		lastLLMCall: map[string]string{},
+		tenantName:  tenantName,
 	}
+	return r
 }
 
 // ReportLLM records one model call (prompt+response metadata + content).
@@ -96,6 +99,9 @@ func (r *reporter) ReportLLM(sessionID, model string, reqBody, respBody []byte, 
 		"session":     sessionID,
 		"trace_id":    traceID,
 		"parent_id":   llmCallID,
+		"tenant_name": r.tenantName,
+		"principal":   r.tenantName,
+		"role":        "employee",
 		"model":       model,
 		"duration_ms": ms,
 		"request":     jsonRaw(reqBody),
@@ -114,11 +120,14 @@ func (r *reporter) ReportTool(sessionID, toolID string, args []byte, verdict str
 	r.mu.Unlock()
 
 	ev := map[string]any{
-		"kind":      "tool_call",
-		"session":   sessionID,
-		"trace_id":  traceID,
-		"parent_id": parent,
-		"tool":      toolID,
+		"kind":       "tool_call",
+		"session":    sessionID,
+		"trace_id":   traceID,
+		"parent_id":  parent,
+		"tenant_name": r.tenantName,
+		"principal":  r.tenantName,
+		"role":       "employee",
+		"tool":       toolID,
 		"args":      jsonRaw(args),
 		"verdict":   verdict,
 		"reason":    reason,

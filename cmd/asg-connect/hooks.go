@@ -31,7 +31,7 @@ func hookCheck(args []string) error {
 	if err != nil {
 		return err
 	}
-	rep := newReporter(cfg.HubURL, cfg.TenantKey, cfg.EventSpoolPath)
+	rep := newReporter(cfg.HubURL, cfg.TenantKey, cfg.EventSpoolPath, cfg.TenantName)
 	sessionID := req.SessionID
 	if sessionID == "" {
 		sessionID = "hook-" + cfg.TenantName

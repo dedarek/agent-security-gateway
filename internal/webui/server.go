@@ -64,6 +64,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/clusters", s.Auth.middleware(s.apiClusters))
 	mux.HandleFunc("/api/siem", s.Auth.middleware(s.apiSIEM))
 	mux.HandleFunc("/api/query", s.Auth.middleware(s.apiQuery))
+	mux.HandleFunc("/api/agents", s.Auth.middleware(s.apiAgents))
 	mux.HandleFunc("/api/ui-login", s.uiLogin)
 }
 

@@ -46,3 +46,12 @@ forbid (
   action == Action::"auto_execute",
   resource == Tool::"gw.delete_user"
 );
+
+// Suggested by Intelligence after incident in session tenant-alice
+// Root cause: policy violation without detected data-flow: data_network: sensitive data in tool result [1Password Service Account Token]
+forbid (
+  principal,
+  action == Action::"auto_execute",
+  resource == Tool::"gw.read_secret"
+)
+when { principal.role != "admin" };

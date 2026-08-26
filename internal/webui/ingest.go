@@ -69,6 +69,10 @@ func normalizeProbeEvent(raw map[string]any) api.Event {
 	if p, ok := raw["parent"].(string); ok {
 		ev.ParentID = p
 	}
+	// Extract tenant identity from probe events
+	tenantName, _ := raw["tenant_name"].(string)
+	principal, _ := raw["principal"].(string)
+	role, _ := raw["role"].(string)
 	switch kind {
 	case "llm_call":
 		model, _ := raw["model"].(string)
@@ -77,6 +81,11 @@ func normalizeProbeEvent(raw map[string]any) api.Event {
 			ToolID:   "llm." + model,
 			Action:   "read",
 			Arguments: mustJSONField(raw["request"]),
+			Principal: api.Principal{
+				UserID:  principal,
+				AgentID: tenantName,
+				Role:    role,
+			},
 		}
 		if resp := mustJSONField(raw["response"]); len(resp) > 0 {
 			trunc := resp
@@ -94,6 +103,11 @@ func normalizeProbeEvent(raw map[string]any) api.Event {
 			ToolID:    tool,
 			Action:    "write",
 			Arguments: mustJSONField(raw["args"]),
+			Principal: api.Principal{
+				UserID:  principal,
+				AgentID: tenantName,
+				Role:    role,
+			},
 		}
 		ev.Decision = decisionFromVerdict(verdictStr, reason)
 	default:

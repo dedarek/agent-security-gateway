@@ -338,6 +338,10 @@ select.inp{appearance:none;padding-right:28px;background-image:url("data:image/s
           <div class="panel-h"><h3>三轴信号</h3><span class="h-right">按轴聚合</span></div>
           <div class="panel-b"><div class="axis-list" id="axis-list"><div class="empty"><span class="empty-icon">◌</span>暂无信号</div></div></div>
         </div>
+      <div class="panel" style="margin-top:14px">
+        <div class="panel-h"><h3>已接入 Agent</h3><span class="h-right">实时连接状态</span></div>
+        <div class="panel-b"><div id="agents-list"><div class="empty"><span class="empty-icon">◌</span>暂无 agent 接入</div></div></div>
+      </div>
       </div>
       <div class="section-gap"></div>
       <div class="grid-2">
@@ -569,6 +573,23 @@ function showLogin(){
 }
 
 // ── nav ──
+async function loadAgents(){
+  try{
+    const agents=await fetch('/api/agents').then(r=>r.json());
+    const bx=document.getElementById('agents-list');if(!bx)return;
+    if(!agents?.length){bx.innerHTML='<div class="empty"><span class="empty-icon">◌</span>暂无 agent 接入</div>';return}
+    bx.innerHTML='';
+    agents.forEach(a=>{
+      const d=document.createElement('div');
+      d.style.cssText='display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid var(--border)';
+      d.innerHTML=`<div><b style="font-size:13px">${a.agent_id||a.session_id}</b>
+        <span style="color:var(--dim);margin-left:8px;font-size:11px">${a.user_id||''}</span></div>
+        <div style="text-align:right"><span class="badge badge-${a.last_verdict}">${a.last_verdict}</span>
+        <span style="color:var(--dim);margin-left:6px;font-size:11px">${a.event_count} events</span></div>`;
+      bx.appendChild(d);
+    });
+  }catch(e){}
+}
 const TITLES={overview:['总览','实时安全态势'],events:['事件','全部决策记录'],sessions:['会话','轨迹回放与根因'],intel:['情报','建议 · 聚类 · 策略'],approvals:['审批','人工确认队列'],graph:['图谱','Semantica 链路追溯'],admin:['管理','注册表 · 回执 · 系统']};
 let curView='overview';
 document.querySelectorAll('.nav-item').forEach(el=>{
@@ -582,6 +603,7 @@ document.querySelectorAll('.nav-item').forEach(el=>{
     if(v==='admin'){loadAdmin();}
     if(v==='approvals'){loadApprovals();}
     if(v==='sessions'){loadSessions();}
+  loadAgents();
     if(v==='graph'){loadGraph();}
   });
 });

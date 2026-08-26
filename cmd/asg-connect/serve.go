@@ -25,7 +25,7 @@ func serve(cfgPath string) error {
 	if err != nil {
 		return err
 	}
-	rep := newReporter(cfg.HubURL, cfg.TenantKey, cfg.EventSpoolPath)
+	rep := newReporter(cfg.HubURL, cfg.TenantKey, cfg.EventSpoolPath, cfg.TenantName)
 	p := &llmProxy{cfg: cfg, rep: rep}
 
 	// Initialize semantic scanner (LLM-powered output analysis)
