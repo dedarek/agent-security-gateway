@@ -3,7 +3,11 @@
 // api/proto/*.proto so Go and Python share identical schemas.
 package api
 
-import "time"
+import (
+	"encoding/json"
+	"strings"
+	"time"
+)
 
 // Axis is one of the three orthogonal security axes. Every Engine belongs to
 // exactly one axis, but each axis spans all three lifecycle phases.
@@ -61,6 +65,32 @@ func (v Verdict) String() string {
 	default:
 		return "UNKNOWN"
 	}
+}
+
+// MarshalJSON converts Verdict to string in JSON output.
+func (v Verdict) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.String())
+}
+
+// UnmarshalJSON parses string representation back to Verdict.
+func (v *Verdict) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	switch strings.ToUpper(s) {
+	case "ALLOW":
+		*v = VerdictAllow
+	case "REDACT":
+		*v = VerdictRedact
+	case "CONFIRM":
+		*v = VerdictConfirm
+	case "BLOCK":
+		*v = VerdictBlock
+	default:
+		*v = VerdictAllow
+	}
+	return nil
 }
 
 // FailMode declares how the aggregator treats an engine error.
