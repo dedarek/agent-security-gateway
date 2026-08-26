@@ -574,21 +574,24 @@ function showLogin(){
 
 // ── nav ──
 async function loadAgents(){
+  const bx=document.getElementById('agents-list');if(!bx)return;
   try{
-    const agents=await fetch('/api/agents').then(r=>r.json());
-    const bx=document.getElementById('agents-list');if(!bx)return;
-    if(!agents?.length){bx.innerHTML='<div class="empty"><span class="empty-icon">◌</span>暂无 agent 接入</div>';return}
+    const agents=await j('/api/agents');
+    if(!agents)return;
+    if(!agents.length){bx.innerHTML='<div class="empty"><span class="empty-icon">◌</span>暂无 agent 接入</div>';return}
     bx.innerHTML='';
     agents.forEach(a=>{
       const d=document.createElement('div');
       d.style.cssText='display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid var(--border)';
-      d.innerHTML=`<div><b style="font-size:13px">${a.agent_id||a.session_id}</b>
-        <span style="color:var(--dim);margin-left:8px;font-size:11px">${a.user_id||''}</span></div>
-        <div style="text-align:right"><span class="badge badge-${a.last_verdict}">${a.last_verdict}</span>
+      d.innerHTML=`<div><b style="font-size:13px">${esc(a.agent_id||a.session_id)}</b>
+        <span style="color:var(--dim);margin-left:8px;font-size:11px">${esc(a.user_id||'')}</span></div>
+        <div style="text-align:right"><span class="badge badge-${esc(a.last_verdict)}">${esc(a.last_verdict)}</span>
         <span style="color:var(--dim);margin-left:6px;font-size:11px">${a.event_count} events</span></div>`;
       bx.appendChild(d);
     });
-  }catch(e){}
+  }catch(e){
+    bx.innerHTML=`<div class="empty" style="color:var(--bad)">Agent 列表加载失败：${esc(e.message||String(e))}</div>`;
+  }
 }
 const TITLES={overview:['总览','实时安全态势'],events:['事件','全部决策记录'],sessions:['会话','轨迹回放与根因'],intel:['情报','建议 · 聚类 · 策略'],approvals:['审批','人工确认队列'],graph:['图谱','Semantica 链路追溯'],admin:['管理','注册表 · 回执 · 系统']};
 let curView='overview';
@@ -1088,8 +1091,8 @@ async function tracePath(){
 }
 
 // ── boot ──
-Promise.all([loadOverview(),loadSessions()]);
-setInterval(()=>{ if(curView==='overview') loadOverview(); },4000);
+Promise.all([loadOverview(),loadSessions(),loadAgents()]);
+setInterval(()=>{ if(curView==='overview') { loadOverview(); loadAgents(); } },4000);
 setInterval(()=>{ if(curView==='sessions'&&selSession) loadTrajectory(); },5000);
 setInterval(()=>{ if(curView==='approvals') loadApprovals(); },4000);
 </script>

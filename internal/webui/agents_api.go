@@ -12,12 +12,21 @@ func (s *Server) apiAgents(w http.ResponseWriter, r *http.Request) {
 	for _, e := range events {
 		sid := e.SessionID
 		p := e.Call.Principal
+		// Use session_id as agent_id when Principal is empty (probe LLM events)
+		agentID := p.AgentID
+		if agentID == "" {
+			agentID = sid // fallback to session id for probe events
+		}
+		userID := p.UserID
+		if userID == "" {
+			userID = sid // fallback
+		}
 		key := sid
 		if _, ok := agents[key]; !ok {
 			agents[key] = &AgentInfo{
 				SessionID:   sid,
-				UserID:      p.UserID,
-				AgentID:     p.AgentID,
+				UserID:      userID,
+				AgentID:     agentID,
 				Role:        p.Role,
 				EventCount:  0,
 				LastVerdict: "ALLOW",

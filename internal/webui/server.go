@@ -47,6 +47,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 		}
 		// If not authenticated, serve login page instead of console
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+		w.Header().Set("Pragma", "no-cache")
 		_, _ = w.Write(page)
 	}))
 	// Login page endpoint (GET returns HTML, POST processes login)
