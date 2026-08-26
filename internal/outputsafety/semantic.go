@@ -1,11 +1,12 @@
 package outputsafety
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
-	"bytes"
 	"sync"
 	"time"
 )
@@ -88,7 +89,7 @@ func cosine(a, b []float64) float64 {
 	if na == 0 || nb == 0 {
 		return 0
 	}
-	return dot / (na*nb + 1e-9)
+	return dot / (math.Sqrt(na)*math.Sqrt(nb) + 1e-9)
 }
 
 // ScanSemantic runs the two-layer semantic scan in INLINE mode (fast).
@@ -171,7 +172,11 @@ func getEmbedding(url, text string) ([]float64, error) {
 	req, err := http.NewRequest("POST", url+"/embed", strings.NewReader(string(body)))
 	if err != nil { return nil, err }
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	c := httpClient
+	if c == nil {
+		c = &http.Client{Timeout: 10 * time.Second}
+	}
+	resp, err := c.Do(req)
 	if err != nil { return nil, err }
 	defer resp.Body.Close()
 	var out struct { Vectors [][]float64 `json:"vectors"` }

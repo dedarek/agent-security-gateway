@@ -1,18 +1,30 @@
 # 行为/因果轴策略 — Invariant DSL (invariant-ai 0.3.5 验证语法)
-# 语法要点: (call: ToolCall) 括号声明 + call is tool:NAME 语义匹配
+# 招牌原语: (x: ToolCall) 类型化变量 + "->" 数据流边 + "call is tool:NAME" 语义匹配
 # 此文件由中央 Intelligence 面维护, 探针/网关的 sidecar 加载执行.
+# taint.go 已提供内容级真 taint；本文件补充 trajectory 级因果规则.
 
-# 规则1: 不可信来源(邮件)之后直接外发 → 因果链攻击
-raise PolicyViolation("untrusted inbox content flowed into egress", call=call) if:
-    (call: ToolCall)
-    call is tool:send_email
+from invariant.detectors import prompt_injection
 
-# 规则2: 读密钥后任何出网动作
-raise PolicyViolation("secret access followed by egress", call=call) if:
-    (call: ToolCall)
-    call is tool:http_post
+# 规则1: 不可信邮件内容经数据流流入外发 —— 真因果（非位置可达）
+raise PolicyViolation("untrusted inbox content flowed into egress via data-flow", egress=egress) if:
+    (src: ToolOutput) -> (egress: ToolCall)
+    src is tool:get_inbox
+    egress is tool:send_email
+    prompt_injection(src.content, threshold=0.6)
 
-# 规则3: 批量导出用户数据
+# 规则2: 密钥读取后经数据流外发 —— 敏感数据渗出
+raise PolicyViolation("secret access followed by network egress", egress=egress) if:
+    (src: ToolOutput) -> (egress: ToolCall)
+    src is tool:read_secret
+    egress is tool:http_post
+
+# 规则3: 批量导出用户数据（单步高危，无需数据流）
 raise PolicyViolation("bulk user export", call=call) if:
     (call: ToolCall)
     call is tool:export_all_users
+
+# 规则4: 任意不可信源 → 外发（通用兜底，关联语义）
+raise PolicyViolation("untrusted source content reached egress sink", sink=sink) if:
+    (src: ToolOutput) -> (sink: ToolCall)
+    src is tool:fetch
+    sink is tool:send_email

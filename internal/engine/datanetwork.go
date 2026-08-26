@@ -182,7 +182,7 @@ func block(e *DataNetworkEngine, kind string, r compiledRule, reason string) *ap
 func redactOrBlock(e *DataNetworkEngine, r compiledRule, hits []string, reason string) *api.Signal {
 	v := api.VerdictRedact
 	if r.Severity == "critical" {
-		v = api.VerdictRedact // scrub critical secrets rather than hard-block, keep usability
+		v = api.VerdictBlock // critical secrets are never forwarded, even redacted
 	}
 	redactions := make([]api.Redaction, 0, len(hits))
 	for _, h := range hits {

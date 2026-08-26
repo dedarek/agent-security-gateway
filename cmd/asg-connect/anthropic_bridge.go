@@ -103,6 +103,10 @@ func (p *llmProxy) handleAnthropicBridge(w http.ResponseWriter, r *http.Request)
 				} `json:"tool_calls"`
 			} `json:"message"`
 		} `json:"choices"`
+		Usage *struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
 	}
 	json.Unmarshal(respBody, &ccResp)
 
@@ -137,6 +141,11 @@ func (p *llmProxy) handleAnthropicBridge(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	inTokens, outTokens := 0, len(content)/4
+	if ccResp.Usage != nil {
+		inTokens = ccResp.Usage.PromptTokens
+		outTokens = ccResp.Usage.CompletionTokens
+	}
 	out := map[string]any{
 		"id":            "msg_" + fmt.Sprintf("%d", time.Now().UnixNano()),
 		"type":          "message",
@@ -146,8 +155,8 @@ func (p *llmProxy) handleAnthropicBridge(w http.ResponseWriter, r *http.Request)
 		"stop_reason":   stopReason,
 		"stop_sequence": nil,
 		"usage": map[string]any{
-			"input_tokens":  100,
-			"output_tokens": len(content) / 4,
+			"input_tokens":  inTokens,
+			"output_tokens": outTokens,
 		},
 	}
 	w.Header().Set("Content-Type", "application/json")

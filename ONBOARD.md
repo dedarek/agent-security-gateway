@@ -10,7 +10,7 @@
 
 ### 你需要的信息
 
-- 网关公网地址: `https://5b501ad8.r24.cpolar.top`
+- 网关地址（局域网直连）: `http://172.16.26.253`
 - 租户 key: `sk-alice-demo-key`
 - 租户名: `alice`
 
@@ -43,7 +43,7 @@ providers:
     base_url: "<填入你当前使用的模型API地址>"
     api_key: "${MY_API_KEY}"
     default_model: "<填入你的默认模型名>"
-hub_url: "https://5b501ad8.r24.cpolar.top"
+hub_url: "http://172.16.26.253:8090"
 tenant_key: "sk-alice-demo-key"
 tenant_name: "alice"
 event_spool_path: "./connect-events.jsonl"
@@ -161,5 +161,5 @@ curl -s -X POST http://127.0.0.1:8181/mcp \
 
 ## 附：管理员信息
 
-- 控制台: https://5b501ad8.r24.cpolar.top （密码: admin）
-- 图谱可视化: https://5b501ad8.r24.cpolar.top/explorer/
+- 控制台: http://172.16.26.253:8090 （密码: admin）
+- 图谱可视化: http://172.16.26.253:8090/explorer/

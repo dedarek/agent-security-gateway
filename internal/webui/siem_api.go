@@ -2,7 +2,6 @@ package webui
 
 import (
 	"net/http"
-	"strings"
 
 	"github.com/dedarek/agent-security-gateway/internal/siem"
 )
@@ -20,5 +19,3 @@ func (s *Server) apiSIEM(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(l + "\n"))
 	}
 }
-
-var _ = strings.TrimSpace

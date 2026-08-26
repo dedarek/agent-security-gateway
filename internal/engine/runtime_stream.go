@@ -59,8 +59,6 @@ func blockRuntime(r compiledRule, reason string) *api.Signal {
 }
 
 func redactRuntime(r compiledRule) *api.Signal {
-	hits := map[string]bool{}
-	_ = hits
 	return &api.Signal{
 		Axis:     api.AxisDataNetwork,
 		Engine:   "datanetwork.runtime-stream",

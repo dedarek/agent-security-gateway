@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -95,19 +96,18 @@ func (a *uiAuth) middleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// isLocalOnly reports whether this request is genuinely from the local
-// console and NOT through a tunnel (tunnels present forwarding headers).
+// isLocalOnly reports whether this request genuinely originated from the
+// loopback interface. It trusts RemoteAddr (set by the network stack), NOT
+// the client-controlled Host header. Tunnel forwarding headers force auth.
 func (a *uiAuth) isLocalOnly(r *http.Request) bool {
-	if r.Header.Get("X-Forwarded-For") != "" || r.Header.Get("X-Real-IP") != "" ||
-		strings.HasPrefix(r.Host, "cpolar") || strings.Contains(r.Host, ".cpolar.") ||
-		strings.Contains(r.Host, ".vip.cpolar.cn") {
-		return false // tunneled: require auth regardless of apparent host
+	if r.Header.Get("X-Forwarded-For") != "" || r.Header.Get("X-Real-IP") != "" {
+		return false // tunneled/proxied: require auth regardless of apparent host
 	}
-	host := r.Host
-	if i := strings.LastIndex(host, ":"); i > 0 {
-		host = host[:i]
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
 	}
-	return host == "127.0.0.1" || host == "localhost"
+	return host == "127.0.0.1" || host == "::1" || host == "localhost"
 }
 
 func (s *Server) uiLogin(w http.ResponseWriter, r *http.Request) {

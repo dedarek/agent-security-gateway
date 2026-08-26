@@ -6,7 +6,6 @@ package proxy
 
 import (
 	"context"
-	"encoding/json"
 	"log"
 	"sort"
 	"strings"
@@ -15,7 +14,12 @@ import (
 	"github.com/dedarek/agent-security-gateway/api"
 	"github.com/dedarek/agent-security-gateway/internal/audit"
 	"github.com/dedarek/agent-security-gateway/internal/engine"
+	"github.com/dedarek/agent-security-gateway/internal/judge"
+	"github.com/dedarek/agent-security-gateway/internal/kg"
+	"github.com/dedarek/agent-security-gateway/internal/kgbridge"
+	"github.com/dedarek/agent-security-gateway/internal/monitor"
 	"github.com/dedarek/agent-security-gateway/internal/receipt"
+	"github.com/dedarek/agent-security-gateway/internal/riskpattern"
 	"github.com/dedarek/agent-security-gateway/internal/session"
 )
 
@@ -45,6 +49,10 @@ type Gateway struct {
 	Receipts   *receipt.Emitter
 	Observers  []ResultObserver
 	PolicyHash string
+	Monitor    *monitor.Monitor
+	Judge      *judge.Judge
+	KGBuilder  *kg.Builder
+	KGBridge   *kgbridge.Bridge
 }
 
 // Handle runs one tool call through Pre -> (approve) -> Runtime -> Post and
@@ -166,7 +174,7 @@ func moreSevere(a, b api.Decision) api.Decision {
 	return winner
 }
 
-// record emits both the audit event and a signed action-receipt.
+// record emits the audit event, a signed receipt, and fans out to monitor/judge.
 func (g *Gateway) record(c *api.ToolCall, r *api.ToolResult, d api.Decision) {
 	ev := api.Event{
 		SessionID: c.Principal.SessionID,
@@ -183,6 +191,48 @@ func (g *Gateway) record(c *api.ToolCall, r *api.ToolResult, d api.Decision) {
 	if g.Receipts != nil {
 		if _, err := g.Receipts.Emit(g.toActionRecord(c, d)); err != nil {
 			log.Printf("receipt emit failed: %v", err)
+		}
+	}
+	if g.Monitor != nil {
+		toolName := lastSeg(c.ToolID)
+		g.Monitor.ProcessToolCall(c.Principal.SessionID, ev.TraceID, toolName)
+		g.Monitor.ProcessEvent(ev.TraceID, riskpattern.Event{
+			ToolID:  toolName,
+			Action:  c.Action,
+			Verdict: d.Final.String(),
+			Risk:    d.Risk,
+			Time:    ev.Timestamp,
+		})
+		if r != nil && len(r.Output) > 0 && d.Final != api.VerdictBlock {
+			g.Monitor.ProcessOutput(c.Principal.SessionID, ev.TraceID, string(r.Output))
+		}
+	}
+	if g.Judge != nil && (d.Final == api.VerdictBlock || d.Risk >= 70) {
+		blocked := []string{}
+		if d.Final == api.VerdictBlock {
+			blocked = append(blocked, c.ToolID+": "+d.Rationale)
+		}
+		// best-effort async: never blocks tool execution
+		g.Judge.Submit(judge.JudgeTask{
+			SessionID: c.Principal.SessionID,
+			TraceID:   ev.TraceID,
+			ToolCalls: []string{c.ToolID},
+			Blocked:   blocked,
+		})
+	}
+	// Feed KG: build graph entities + index event text for semantic search.
+	if g.KGBuilder != nil {
+		g.KGBuilder.Ingest(ev)
+		if g.KGBridge != nil {
+			ents, rels := g.KGBuilder.Export()
+			go func() {
+				_ = g.KGBridge.Ingest(ents, rels)
+				text := c.ToolID + " " + d.Rationale
+				if r != nil && len(r.Output) > 0 {
+					text += " " + truncateStr(string(r.Output), 200)
+				}
+				_ = g.KGBridge.IndexEvents([]string{text}, []string{c.CallID})
+			}()
 		}
 	}
 }
@@ -251,4 +301,9 @@ func lastSeg(id string) string {
 	return id
 }
 
-var _ = json.Marshal // keep json import for future streaming redaction
+func truncateStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}

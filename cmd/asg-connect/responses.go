@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -267,10 +269,17 @@ func mustJSON(v any) []byte {
 }
 
 func randHex(n int) string {
-	const hexDigits = "0123456789abcdef"
-	b := make([]byte, n)
-	for i := range b {
-		b[i] = hexDigits[time.Now().UnixNano()%16]
+	need := (n + 1) / 2
+	b := make([]byte, need)
+	if _, err := rand.Read(b); err != nil {
+		// fallback: timestamp-based
+		for i := range b {
+			b[i] = byte(time.Now().UnixNano() >> uint(i*8))
+		}
 	}
-	return string(b)
+	s := hex.EncodeToString(b)
+	if len(s) > n {
+		s = s[:n]
+	}
+	return s
 }

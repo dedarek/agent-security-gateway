@@ -11,12 +11,15 @@
 package receipt
 
 import (
+	"bufio"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -129,6 +132,8 @@ func VerifyWithKey(r Receipt, expectedKeyHex string) error {
 
 // Emitter signs receipts and maintains the tamper-evident chain. Concurrency-safe:
 // the lock spans stamp -> sign -> hash -> advance so the chain stays monotonic.
+// When filePath != "" every receipt is appended to a JSONL file and replayed on
+// Open, so the chain survives restarts.
 type Emitter struct {
 	mu       sync.Mutex
 	priv     ed25519.PrivateKey
@@ -137,9 +142,11 @@ type Emitter struct {
 	seq      uint64
 	runNonce string
 	receipts []Receipt
+	filePath string
+	file     *os.File
 }
 
-// NewEmitter generates a fresh Ed25519 key and run nonce.
+// NewEmitter generates a fresh Ed25519 key and run nonce (memory only).
 func NewEmitter() (*Emitter, error) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -151,6 +158,57 @@ func NewEmitter() (*Emitter, error) {
 		prevHash: genesis,
 		runNonce: uuid.NewString(),
 	}, nil
+}
+
+// OpenEmitter creates an emitter backed by a JSONL file at path. The file is
+// replayed to restore prevHash/seq so the hash chain is continuous across
+// restarts. Pass "" for memory-only (demo) mode.
+func OpenEmitter(path string) (*Emitter, error) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	e := &Emitter{
+		priv:     priv,
+		pubHex:   hex.EncodeToString(pub),
+		prevHash: genesis,
+		runNonce: uuid.NewString(),
+		filePath: path,
+	}
+	if path == "" {
+		return e, nil
+	}
+	if dir := filepath.Dir(path); dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("receipt dir: %w", err)
+		}
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	e.file = f
+	// replay
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 1<<20), 16<<20)
+	var last *Receipt
+	for sc.Scan() {
+		var r Receipt
+		if json.Unmarshal(sc.Bytes(), &r) != nil {
+			continue
+		}
+		e.receipts = append(e.receipts, r)
+		cp := r
+		last = &cp
+	}
+	if last != nil {
+		h, err := ReceiptHash(*last)
+		if err == nil {
+			e.prevHash = h
+			e.seq = last.ActionRecord.ChainSeq + 1
+		}
+	}
+	return e, nil
 }
 
 // SignerKey returns the emitter's public key (hex) — the trust anchor for verification.
@@ -174,6 +232,10 @@ func (e *Emitter) Emit(ar ActionRecord) (Receipt, error) {
 	e.prevHash = h
 	e.seq++
 	e.receipts = append(e.receipts, rec)
+	if e.file != nil {
+		b, _ := json.Marshal(rec)
+		_, _ = e.file.Write(append(b, '\n'))
+	}
 	return rec, nil
 }
 

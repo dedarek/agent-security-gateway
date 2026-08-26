@@ -9,6 +9,7 @@ package engine
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/dedarek/agent-security-gateway/api"
 )
@@ -55,6 +56,8 @@ func (r *Registry) Engines() []Engine { return r.engines }
 // aggregates the signals into a Decision. A per-call timeout keeps the gateway
 // latency bounded even when a third-party engine misbehaves.
 func (r *Registry) EvaluatePre(ctx context.Context, c *api.ToolCall) api.Decision {
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
 	var wg sync.WaitGroup
 	sigs := make([]api.Signal, len(r.engines))
 	for i, e := range r.engines {
@@ -67,7 +70,20 @@ func (r *Registry) EvaluatePre(ctx context.Context, c *api.ToolCall) api.Decisio
 			}
 		}(i, e)
 	}
-	wg.Wait()
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		// timed out: any engine that hasn't reported is treated as fail per its mode
+		for i, e := range r.engines {
+			if sigs[i].Engine == "" {
+				if s := normalize(e, nil, ctx.Err()); s != nil {
+					sigs[i] = *s
+				}
+			}
+		}
+	}
 	var signals []api.Signal
 	for _, s := range sigs {
 		if s.Engine != "" {
@@ -79,6 +95,8 @@ func (r *Registry) EvaluatePre(ctx context.Context, c *api.ToolCall) api.Decisio
 
 // EvaluatePost runs every engine's post hook in parallel and aggregates.
 func (r *Registry) EvaluatePost(ctx context.Context, c *api.ToolCall, res *api.ToolResult) api.Decision {
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
 	var wg sync.WaitGroup
 	sigs := make([]api.Signal, len(r.engines))
 	for i, e := range r.engines {
@@ -91,7 +109,19 @@ func (r *Registry) EvaluatePost(ctx context.Context, c *api.ToolCall, res *api.T
 			}
 		}(i, e)
 	}
-	wg.Wait()
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		for i, e := range r.engines {
+			if sigs[i].Engine == "" {
+				if s := normalize(e, nil, ctx.Err()); s != nil {
+					sigs[i] = *s
+				}
+			}
+		}
+	}
 	var signals []api.Signal
 	for _, s := range sigs {
 		if s.Engine != "" {

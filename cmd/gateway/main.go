@@ -22,7 +22,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"flag"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -36,8 +35,10 @@ import (
 	"github.com/dedarek/agent-security-gateway/internal/engine"
 	"github.com/dedarek/agent-security-gateway/internal/ingress"
 	"github.com/dedarek/agent-security-gateway/internal/judge"
+	"github.com/dedarek/agent-security-gateway/internal/kg"
 	"github.com/dedarek/agent-security-gateway/internal/kgbridge"
 	"github.com/dedarek/agent-security-gateway/internal/mcpproxy"
+	"github.com/dedarek/agent-security-gateway/internal/monitor"
 	"github.com/dedarek/agent-security-gateway/internal/policyhub"
 	"github.com/dedarek/agent-security-gateway/internal/proxy"
 	"github.com/dedarek/agent-security-gateway/internal/receipt"
@@ -128,12 +129,23 @@ func serveCmd(args []string) {
 	reg.Register(taint)
 	registerBehaviorSidecar(reg, store_, cfg)
 
-	emitter, err := receipt.NewEmitter()
+	emitter, err := receipt.OpenEmitter("./data/receipts.jsonl")
 	if err != nil {
-		log.Fatalf("receipt emitter: %v", err)
+		log.Printf("[receipt] file emitter unavailable, using memory only: %v", err)
+		emitter, err = receipt.NewEmitter()
+		if err != nil {
+			log.Fatalf("receipt emitter: %v", err)
+		}
 	}
 	approvals := approval.NewManager(cfg.ApprovalTimeout)
 	hub := policyhub.New(cfg.CedarPolicyPath)
+
+	mon := monitor.New()
+	judgeInst := judge.New("http://127.0.0.1:8181", "dummy")
+	log.Printf("[judge] LLM-as-Judge initialized (model via probe)")
+
+	kgBuilder := kg.NewBuilder()
+	kgBridgeInst := kgbridge.New(cfg.KGPythonBin, cfg.KGWorkerScript, cfg.KGSemanticaPath, cfg.KGPort)
 
 	gw := &proxy.Gateway{
 		Registry:   reg,
@@ -144,6 +156,10 @@ func serveCmd(args []string) {
 		Receipts:   emitter,
 		Observers:  []proxy.ResultObserver{taint},
 		PolicyHash: policyHash(cfg.CedarPolicyPath, cfg.RulesPath),
+		Monitor:    mon,
+		Judge:      judgeInst,
+		KGBuilder:  kgBuilder,
+		KGBridge:   kgBridgeInst,
 	}
 	log.Printf("[gateway] engines ready; policy hash %s", gw.PolicyHash)
 
@@ -155,24 +171,34 @@ func serveCmd(args []string) {
 		log.Fatalf("registry: %v", err)
 	}
 	uiSrv := webui.New(evStore, approvals, hub)
+	uiSrv.SetIngestAuth(func(header string) bool {
+		_, ok := authReg.Authenticate(header)
+		return ok
+	})
+	uiSrv.SetEmitter(emitter)
+	uiSrv.SetJudge(judgeInst)
+	uiSrv.SetMonitor(mon)
+	uiSrv.SetStore(store_)
 	uiSrv.RegisterRegistryAPI(uiMux, mcpRegistry, &webui.TenantNames{Fn: authReg.Names})
 	uiSrv.Register(uiMux)
+	uiSrv.RegisterReceiptAPI(uiMux)
+	uiSrv.RegisterJudgeAPI(uiMux)
+	uiSrv.RegisterMonitorAPI(uiMux)
+	uiSrv.RegisterStatusAPI(uiMux, kgBridgeInst, emitter, mon)
+	uiSrv.RegisterPolicyAPI(uiMux)
 
 	// Semantica Explorer proxied into the console (unified interface).
 	webui.RegisterExplorerProxy(uiMux, cfg.ExplorerURL, cfg.ExplorerAPIKey)
 
 	// Semantica KG bridge (optional): semantic search + KG-grounded Q&A.
-	kgBridge := kgbridge.New(cfg.KGPythonBin, cfg.KGWorkerScript, cfg.KGSemanticaPath, cfg.KGPort)
-	if err := kgBridge.Start(); err != nil {
+	// kgBridgeInst was already created above and wired into the gateway so events
+	// auto-feed the graph; here we just start the worker process.
+	if err := kgBridgeInst.Start(); err != nil {
 		log.Printf("[kg] semantica worker not started: %v", err)
 	} else {
-		uiSrv.RegisterKGAPI(uiMux, kgBridge)
+		uiSrv.RegisterKGAPI(uiMux, kgBridgeInst)
 		log.Printf("[kg] semantica worker on :8902")
 	}
-
-	// LLM-as-Judge: async review of high-risk trajectories using free model.
-	_ = judge.New("http://127.0.0.1:8181", "dummy")
-	log.Printf("[judge] LLM-as-Judge initialized (model via probe)")
 	go func() {
 		uiAddr := cfg.UIListen
 		if uiAddr == "" {
@@ -228,8 +254,6 @@ type liveForwarder struct {
 func (f *liveForwarder) Forward(ctx context.Context, c *api.ToolCall) (*api.ToolResult, error) {
 	return f.up.Forward(ctx, c)
 }
-
-var _ = fmt.Sprintf // keep fmt for future use
 
 func demoCmd() {
 	cfg := config.Default()

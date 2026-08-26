@@ -23,7 +23,7 @@ behavior_sidecar_url: "http://127.0.0.1:8901"
 behavior_fail_open: true
 
 # Semantica KG bridge (optional; leave worker_script empty to disable)
-kg_python_bin: "python"
+kg_python_bin: "./.venv-kg312/bin/python"
 kg_worker_script: "internal/kgbridge/asg_kg_worker.py"
-kg_semantica_path: "D:/proj/semantica"
+kg_semantica_path: "/Users/mac/Documents/Default Project/semantica"
 kg_port: 8902

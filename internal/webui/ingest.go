@@ -11,11 +11,20 @@ import (
 	"github.com/dedarek/agent-security-gateway/api"
 )
 
-// RegisterIngest adds the probe-facing endpoints to the UI mux. Events arrive
-// as NDJSON with kind=llm_call|tool_call and are normalized into api.Event so
-// the existing trajectory/explorer UIs work unchanged.
 func (s *Server) RegisterIngest(mux *http.ServeMux) {
-	mux.HandleFunc("/api/ingest", s.apiIngest)
+	s.RegisterIngestWithAuth(mux, s.ingestAuth)
+}
+
+// RegisterIngestWithAuth enforces tenant key auth on /api/ingest.
+// auth==nil means open (dev mode); otherwise a request without a valid key gets 401.
+func (s *Server) RegisterIngestWithAuth(mux *http.ServeMux, auth func(header string) bool) {
+	mux.HandleFunc("/api/ingest", func(w http.ResponseWriter, r *http.Request) {
+		if auth != nil && !auth(r.Header.Get("Authorization")) {
+			http.Error(w, "unauthorized", 401)
+			return
+		}
+		s.apiIngest(w, r)
+	})
 }
 
 func (s *Server) apiIngest(w http.ResponseWriter, r *http.Request) {

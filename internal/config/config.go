@@ -62,7 +62,7 @@ func Default() Config {
 		EventLogPath:             "./data/events.jsonl",
 		UIListen:                 ":8090",
 		ApprovalTimeout:          120 * time.Second,
-		KGPythonBin:              "python",
+		KGPythonBin:              "./.venv-kg/bin/python",
 		KGWorkerScript:           "internal/kgbridge/asg_kg_worker.py",
 		KGSemanticaPath:          "", // set to semantica checkout if used
 		KGPort:                   8902,

@@ -4,7 +4,6 @@
 package policyhub
 
 import (
-	"fmt"
 	"os"
 	"sync"
 
@@ -50,4 +49,4 @@ func (h *Hub) reloadLocked() error {
 	return engine.ReloadPermissionPolicies(h.policyPath)
 }
 
-var _ = fmt.Sprintf
+

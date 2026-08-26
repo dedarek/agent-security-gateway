@@ -37,3 +37,13 @@ data/events.jsonl
 connect-events.jsonl*
 *.queue
 demo/
+
+# venvs
+.venv-*/
+.venv-kg*/
+
+# logs
+*.log
+
+# backup
+*.bak.html

@@ -283,9 +283,7 @@ func (p *llmProxy) route(body []byte) (*Provider, string, error) {
 			return prov, prov.DefaultModel, nil
 		}
 	}
-	// An explicitly requested model name is passed through verbatim to the
-	// first provider — the user chose it, we route it. Empty name falls back
-	// to the provider default.
+	// Pass-through for explicitly requested models.
 	if len(p.cfg.Providers) > 0 {
 		prov := &p.cfg.Providers[0]
 		up := model
@@ -294,25 +292,7 @@ func (p *llmProxy) route(body []byte) (*Provider, string, error) {
 		}
 		return prov, up, nil
 	}
-	// fallback: first provider; unknown model names map to its default so
-	// agents sending their own defaults (claude-opus-5 etc.) still work.
-	if len(p.cfg.Providers) > 0 {
-		prov := &p.cfg.Providers[0]
-		up := model
-		if prov.DefaultModel != "" {
-			up = prov.DefaultModel
-		}
-		return prov, up, nil
-	}
 	return &Provider{Name: "none"}, model, fmt.Errorf("no providers configured")
-}
-
-// matchFamily lets agents send any model alias containing the provider tag.
-func matchFamily(model, name string) bool {
-	if name == "" {
-		return false
-	}
-	return strings.Contains(strings.ToLower(model), strings.ToLower(name))
 }
 
 

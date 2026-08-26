@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 )
 
 // anthropicSSE synthesizes an Anthropic-format SSE stream from a complete
@@ -63,9 +62,9 @@ func anthropicSSE(w http.ResponseWriter, model, content string, toolUses []map[s
 		seq++
 	}
 
-	// tool_use blocks
-	for _, tu := range toolUses {
-		idx := len(toolUses) // just use sequential indices after text block
+	// tool_use blocks — text is idx 0, tools start at 1
+	for ti, tu := range toolUses {
+		idx := 1 + ti
 		name, _ := tu["name"].(string)
 		input := tu["input"]
 		inputJSON, _ := json.Marshal(input)
@@ -95,4 +94,4 @@ func anthropicSSE(w http.ResponseWriter, model, content string, toolUses []map[s
 	send("message_stop", map[string]any{})
 }
 
-var _ = strings.TrimSpace // keep import
+

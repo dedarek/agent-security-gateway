@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/dedarek/agent-security-gateway/api"
 	"github.com/dedarek/agent-security-gateway/internal/approval"
@@ -20,19 +21,25 @@ import (
 var page []byte
 
 type Server struct {
-	Store     *store.Store
-	Approvals *approval.Manager
-	Hub       *policyhub.Hub
-	Auth      *uiAuth
-	suggs     map[string]*intel.Suggestion
+	Store      *store.Store
+	Approvals  *approval.Manager
+	Hub        *policyhub.Hub
+	Auth       *uiAuth
+	mu         sync.RWMutex
+	suggs      map[string]*intel.Suggestion
+	ingestAuth func(header string) bool // nil = open (dev)
 }
 
 func New(st *store.Store, am *approval.Manager, hub *policyhub.Hub) *Server {
 	return &Server{Store: st, Approvals: am, Hub: hub, Auth: newUIAuth(), suggs: map[string]*intel.Suggestion{}}
 }
 
+// SetIngestAuth enforces tenant-key auth on POST /api/ingest.
+func (s *Server) SetIngestAuth(f func(header string) bool) { s.ingestAuth = f }
+
 func (s *Server) Register(mux *http.ServeMux) {
-	s.RegisterIngest(mux)
+	// ingest auth: open in dev (nil), tenant-key enforced when SetIngestAuth is called
+	s.RegisterIngestWithAuth(mux, s.ingestAuth)
 	mux.HandleFunc("/", s.Auth.middleware(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -80,7 +87,6 @@ func (s *Server) apiTrajectory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	events := s.Store.Trajectory(id)
-	// Analyze on demand; cache by suggestion id.
 	var sug *intel.Suggestion
 	sum := store.SessionSummary{SessionID: id}
 	for _, e := range events {
@@ -89,11 +95,21 @@ func (s *Server) apiTrajectory(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sum.Events = len(events)
-	if cached, ok := s.suggs[sugKey(id)]; ok {
+	s.mu.RLock()
+	cached, ok := s.suggs[sugKey(id)]
+	s.mu.RUnlock()
+	if ok {
 		sug = cached
 	} else if sug = intel.Analyze(sum, events); sug != nil {
-		s.suggs[sugKey(id)] = sug
-		s.suggs[sug.ID] = sug // also indexed by suggestion id for /decide
+		s.mu.Lock()
+		// double-check under write lock
+		if existing, ok := s.suggs[sugKey(id)]; ok {
+			sug = existing
+		} else {
+			s.suggs[sugKey(id)] = sug
+			s.suggs[sug.ID] = sug
+		}
+		s.mu.Unlock()
 	}
 	writeJSON(w, map[string]any{"events": events, "suggestion": sug})
 }
@@ -117,23 +133,27 @@ func (s *Server) apiApprovals(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiSuggestions(w http.ResponseWriter, _ *http.Request) {
-	out := []*intel.Suggestion{}
+	s.mu.RLock()
+	out := make([]*intel.Suggestion, 0, len(s.suggs))
 	for _, sg := range s.suggs {
-		if strings.HasPrefix(sg.ID, "sug-") { // skip session-cache alias keys
+		if strings.HasPrefix(sg.ID, "sug-") {
 			out = append(out, sg)
 		}
 	}
+	s.mu.RUnlock()
 	intel.SortSuggestions(out)
 	writeJSON(w, out)
 }
 
 func (s *Server) apiClusters(w http.ResponseWriter, _ *http.Request) {
-	open := []*intel.Suggestion{}
+	s.mu.RLock()
+	open := make([]*intel.Suggestion, 0)
 	for _, sg := range s.suggs {
 		if strings.HasPrefix(sg.ID, "sug-") && sg.Status == "open" {
 			open = append(open, sg)
 		}
 	}
+	s.mu.RUnlock()
 	writeJSON(w, intel.BuildClusters(open))
 }
 
@@ -146,13 +166,16 @@ func (s *Server) apiSuggestionDecide(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
+	s.mu.Lock()
 	sg, ok := s.suggs[req.ID]
 	if !ok {
+		s.mu.Unlock()
 		http.Error(w, "unknown suggestion", 404)
 		return
 	}
 	if req.Accept {
 		if err := s.Hub.Accept(sg.ID, sg.CedarPolicy); err != nil {
+			s.mu.Unlock()
 			http.Error(w, err.Error(), 500)
 			return
 		}
@@ -161,6 +184,7 @@ func (s *Server) apiSuggestionDecide(w http.ResponseWriter, r *http.Request) {
 		s.Hub.Dismiss(sg.ID)
 		sg.Status = "dismissed"
 	}
+	s.mu.Unlock()
 	writeJSON(w, sg)
 }
 

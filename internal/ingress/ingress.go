@@ -34,11 +34,22 @@ type Ingress struct {
 }
 
 // principalFor maps an authenticated tenant to the decision-plane identity.
+// When the caller passes X-ASG-Session the value is adopted so that probe
+// LLM traces and MCP tool calls land in the same session (enables end-to-end
+// taint). Otherwise we fall back to the coarse tenant-scoped session.
 func principalFor(t authn.Tenant) api.Principal {
+	return principalForWithSession(t, "")
+}
+
+func principalForWithSession(t authn.Tenant, session string) api.Principal {
+	sid := session
+	if sid == "" {
+		sid = "tenant-" + t.Name
+	}
 	return api.Principal{
 		UserID:    t.UserID,
 		AgentID:   t.Name,
-		SessionID: "tenant-" + t.Name,
+		SessionID: sid,
 		Role:      t.Role,
 	}
 }
@@ -80,7 +91,7 @@ func (ing *Ingress) mcpServer(upstream *upstreamSurface) *mcp.Server {
 
 			call := &api.ToolCall{
 				CallID:    fmt.Sprintf("ing-%s-%d", req.Params.Name, time.Now().UnixNano()),
-				Principal: principalFor(tenant),
+				Principal: principalForWithSession(tenant, sessionFromCtx(ctx)),
 				ToolID:    "gw." + toolName,
 				Resource:  "gw",
 				Action:    actionFor(toolName),
@@ -139,9 +150,14 @@ func Serve(ctx context.Context, listen string, gw *proxy.Gateway, upstreamCmd []
 	return err
 }
 
-// sessionFromCtx extracts an MCP session id when present (stateless mode may
-// not have one); falls back to a stable demo session.
-func sessionFromCtx(_ context.Context) string { return "ingress-default" }
+func sessionFromCtx(ctx context.Context) string {
+	if v, ok := ctx.Value(sessionHeaderKey{}).(string); ok && v != "" {
+		return v
+	}
+	return ""
+}
+
+type sessionHeaderKey struct{}
 
 // headerFromCtx pulls the Authorization header out of the request-scoped
 // context installed by the streamable HTTP handler.
@@ -154,10 +170,13 @@ func headerFromCtx(ctx context.Context) string {
 
 type authHeaderKey struct{}
 
-// injectAuthHeader copies the Authorization header into the request context.
+// injectAuthHeader copies Authorization + optional X-ASG-Session into the context.
 func injectAuthHeader(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := context.WithValue(r.Context(), authHeaderKey{}, r.Header.Get("Authorization"))
+		if sid := r.Header.Get("X-ASG-Session"); sid != "" {
+			ctx = context.WithValue(ctx, sessionHeaderKey{}, sid)
+		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"sync"
 )
@@ -58,6 +59,60 @@ func (b *Bridge) Ingest(entities, relationships []map[string]any) error {
 	return nil
 }
 
+// IndexEvents posts raw event texts for fastembed semantic indexing.
+func (b *Bridge) IndexEvents(texts, eventIDs []string) error {
+	body, _ := json.Marshal(map[string]any{"texts": texts, "event_ids": eventIDs})
+	resp, err := http.Post(b.url()+"/events", "application/json", bytesReader(body))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+// GraphNodes returns all nodes in the Semantica graph session.
+func (b *Bridge) GraphNodes() (json.RawMessage, error) {
+	resp, err := http.Get(b.url() + "/graph/nodes")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var out json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// GraphEdges returns all edges in the Semantica graph session.
+func (b *Bridge) GraphEdges() (json.RawMessage, error) {
+	resp, err := http.Get(b.url() + "/graph/edges")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var out json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// GraphPath finds the shortest path between two entities (链路追溯).
+func (b *Bridge) GraphPath(source, target string) (json.RawMessage, error) {
+	resp, err := http.Get(b.url() + "/graph/path?source=" +
+		urlQueryEscape(source) + "&target=" + urlQueryEscape(target))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var out json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // Search does local-fastembed semantic similarity over past events.
 func (b *Bridge) Search(query string, topK int) ([]SearchHit, error) {
 	body, _ := json.Marshal(map[string]any{"query": query, "top_k": topK})
@@ -92,7 +147,10 @@ func (b *Bridge) Ask(question string) (string, error) {
 	return out.Answer, nil
 }
 
-func (b *Bridge) url() string { return fmt.Sprintf("http://127.0.0.1:%d", b.port) }
+func (b *Bridge) url() string { return b.URL() }
+func (b *Bridge) URL() string { return fmt.Sprintf("http://127.0.0.1:%d", b.port) }
+
+func urlQueryEscape(s string) string { return url.QueryEscape(s) }
 
 type SearchHit struct {
 	Text  string  `json:"text"`

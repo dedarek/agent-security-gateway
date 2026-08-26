@@ -98,7 +98,15 @@ func (s *Store) Query(f QueryFilter) ([]api.Event, int) {
 	total := len(matched)
 	offset := f.Offset
 	limit := f.Limit
-	if limit <= 0 { limit = 50 }
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 500 {
+		limit = 500
+	}
 
 	var out []api.Event
 	for idx, i := range matched {

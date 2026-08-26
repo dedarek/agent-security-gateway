@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -105,7 +106,10 @@ func Diff(a, b string) []string {
 	return changes
 }
 
-func (m *Manager) History() []Version { return m.Versions }
-
-var _ = os.WriteFile
-var _ = strings.Split
+func (m *Manager) History() []Version {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]Version, len(m.Versions))
+	copy(out, m.Versions)
+	return out
+}
