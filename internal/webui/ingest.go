@@ -53,6 +53,9 @@ func (s *Server) apiIngest(w http.ResponseWriter, r *http.Request) {
 		if s.Agents != nil && strings.HasPrefix(ev.Call.ToolID, "llm.") && ev.Call.Principal.AgentID != "" {
 			_ = s.Agents.ObserveModel(ev.Call.Principal.AgentID, strings.TrimPrefix(ev.Call.ToolID, "llm."), "", ev.Timestamp)
 		}
+		if s.Agents != nil && ev.Call.Principal.AgentID != "" && ev.SessionID != "" {
+			_ = s.Agents.ObserveSession(ev.Call.Principal.AgentID, ev.SessionID, ev.Timestamp)
+		}
 		s.Store.Write(ev)
 		n++
 	}

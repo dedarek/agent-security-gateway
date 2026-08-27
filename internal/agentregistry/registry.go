@@ -249,6 +249,28 @@ func (r *Registry) ObserveModel(agentID, model, provider string, at time.Time) e
 	return r.saveLocked()
 }
 
+// ObserveSession attaches a session seen in telemetry to the stable runtime
+// identity. A session is deliberately not a new Agent record.
+func (r *Registry) ObserveSession(agentID, sessionID string, at time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	agentID = strings.TrimSpace(agentID)
+	sessionID = strings.TrimSpace(sessionID)
+	if agentID == "" || sessionID == "" {
+		return nil
+	}
+	v, ok := r.records[agentID]
+	if !ok {
+		return nil
+	}
+	v.SessionIDs = appendUnique(v.SessionIDs, sessionID)
+	if at.After(v.LastActivity) {
+		v.LastActivity = at.UTC()
+	}
+	r.records[agentID] = v
+	return r.saveLocked()
+}
+
 func (r *Registry) SetAlias(agentID, alias, actor string) (Record, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

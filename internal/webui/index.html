@@ -1166,7 +1166,7 @@ async function tracePath(){
 
 // ── boot ──
 Promise.all([loadOverview(),loadSessions(),loadAgents(),loadStatus()]);
-setInterval(()=>{ if(curView==='overview') { loadOverview(); loadAgents(); loadStatus(); } },4000);
+setInterval(()=>{ loadAgents(); if(curView==='overview') { loadOverview(); loadStatus(); } },4000);
 setInterval(()=>{ if(curView==='sessions'&&selSession) loadTrajectory(); },5000);
 setInterval(()=>{ if(curView==='approvals') loadApprovals(); },4000);
 </script>

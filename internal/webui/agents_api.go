@@ -9,6 +9,7 @@ import (
 func (s *Server) apiAgents(w http.ResponseWriter, r *http.Request) {
 	events := s.Store.Recent(1000)
 	observed := map[string]*AgentInfo{}
+	observedSessions := map[string]map[string]bool{}
 	for _, e := range events {
 		sid := e.SessionID
 		p := e.Call.Principal
@@ -16,16 +17,25 @@ func (s *Server) apiAgents(w http.ResponseWriter, r *http.Request) {
 		if id == "" {
 			id = sid
 		}
-		v := observed[sid]
+		v := observed[id]
 		if v == nil {
-			v = &AgentInfo{SessionID: sid, AgentID: id, UserID: p.UserID, Role: p.Role, LastVerdict: "ALLOW", Isolation: "active", SessionCount: 1}
-			observed[sid] = v
+			v = &AgentInfo{SessionID: sid, AgentID: id, UserID: p.UserID, Role: p.Role, LastVerdict: "ALLOW", Isolation: "active"}
+			observed[id] = v
+		}
+		if observedSessions[id] == nil {
+			observedSessions[id] = map[string]bool{}
+		}
+		if sid != "" {
+			observedSessions[id][sid] = true
 		}
 		if v.UserID == "" {
 			v.UserID = p.UserID
 		}
 		v.EventCount++
 		v.LastActivity = e.Timestamp.Format("2006-01-02 15:04:05")
+		if strings.HasPrefix(e.Call.ToolID, "llm.") {
+			v.Model = strings.TrimPrefix(e.Call.ToolID, "llm.")
+		}
 		if e.Decision.Final.String() != "ALLOW" {
 			v.LastVerdict = e.Decision.Final.String()
 		}
@@ -63,7 +73,15 @@ func (s *Server) apiAgents(w http.ResponseWriter, r *http.Request) {
 			v.Status = rec.Status
 			v.Isolation = rec.Isolation
 			v.SessionIDs = append([]string{}, rec.SessionIDs...)
-			v.SessionCount = len(rec.SessionIDs)
+			for sessionID := range observedSessions[rec.AgentID] {
+				v.SessionIDs = appendUniqueString(v.SessionIDs, sessionID)
+			}
+			// The original registration heartbeat used AgentID as a placeholder
+			// session. Once real telemetry sessions exist, hide that placeholder.
+			if len(observedSessions[rec.AgentID]) > 0 {
+				v.SessionIDs = removeString(v.SessionIDs, rec.AgentID)
+			}
+			v.SessionCount = len(v.SessionIDs)
 			if v.SessionCount == 0 && sid != "" {
 				v.SessionCount = 1
 			}
@@ -77,6 +95,25 @@ func (s *Server) apiAgents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, out)
+}
+
+func appendUniqueString(values []string, value string) []string {
+	for _, current := range values {
+		if current == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
+func removeString(values []string, target string) []string {
+	out := values[:0]
+	for _, value := range values {
+		if value != target {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 type AgentInfo struct {
