@@ -36,6 +36,14 @@ func (b *Bridge) Start() error {
 	if b.cmd != nil {
 		return nil // already running
 	}
+	// A worker may have been started independently (for example by the local
+	// cluster script). Reuse it when it is healthy instead of launching a
+	// second process on the same port and then losing the KG API registration.
+	if health, err := b.Health(); err == nil {
+		if ready, ok := health["graph_ready"].(bool); ok && ready {
+			return nil
+		}
+	}
 	startupToken := fmt.Sprintf("asg-%d", time.Now().UnixNano())
 	cmd := exec.Command(b.pythonBin, b.workerScript,
 		"--port", fmt.Sprint(b.port), "--semantica-path", b.semanticaPath,
