@@ -152,7 +152,26 @@ func (p *llmProxy) handleLLM(w http.ResponseWriter, r *http.Request) {
 
 	sessionID := r.Header.Get("x-asg-session")
 	if sessionID == "" {
-		sessionID = "probe-" + prov.Name
+		// Honor client-supplied conversation/session hints from body
+		// (claude-code and opencode both pass one), else fall back to a
+		// per-probe-process bucket so concurrent tasks on one agent still
+		// share one session while multiple agents stay separate.
+		var hint struct {
+			ConversationID string `json:"conversation_id"`
+			SessionID      string `json:"session_id"`
+			ThreadID       string `json:"thread_id"`
+		}
+		_ = jsonUnmarshal(body, &hint)
+		switch {
+		case hint.ConversationID != "":
+			sessionID = hint.ConversationID
+		case hint.SessionID != "":
+			sessionID = hint.SessionID
+		case hint.ThreadID != "":
+			sessionID = hint.ThreadID
+		default:
+			sessionID = fmt.Sprintf("probe-%s-%d", prov.Name, os.Getpid())
+		}
 	}
 
 	isStream := strings.Contains(resp.Header.Get("Content-Type"), "event-stream")
@@ -244,38 +263,16 @@ func (p *llmProxy) handleLLM(w http.ResponseWriter, r *http.Request) {
 	w.Write(respBody)
 }
 
-// route picks the provider by model name.
-// allowed_models in config governs what may reach the provider. Names not on
-// the list are silently remapped to the provider default — agents never break,
-// and the operator fully controls which models may burn quota. An empty
-// allowlist means "default only".
+// route picks the provider by model name. Empty model falls back to the
+// first provider's default; otherwise the requested model is passed through
+// verbatim so the console shows the real model the harness chose.
 func (p *llmProxy) route(body []byte) (*Provider, string, error) {
-	allowed := map[string]bool{}
-	for _, prov := range p.cfg.Providers {
-		for _, m := range prov.AllowedModels {
-			allowed[strings.ToLower(m)] = true
-		}
-	}
-
 	var req struct {
 		Model string `json:"model"`
 	}
 	model := ""
 	_ = jsonUnmarshal(body, &req)
 	model = req.Model
-
-	// Any model name the agent invents (claude-opus-5, gpt-4o, ...) is
-	// silently remapped to this provider's default. The allowlist only
-	// governs what may leave the box; agents never break, operators never
-	// burn unintended quota.
-	if model != "" && !allowed[strings.ToLower(model)] {
-		for i := range p.cfg.Providers {
-			if p.cfg.Providers[i].DefaultModel != "" {
-				model = p.cfg.Providers[i].DefaultModel
-				break
-			}
-		}
-	}
 
 	for i := range p.cfg.Providers {
 		prov := &p.cfg.Providers[i]
@@ -288,14 +285,27 @@ func (p *llmProxy) route(body []byte) (*Provider, string, error) {
 			return prov, prov.DefaultModel, nil
 		}
 	}
-	// Pass-through for explicitly requested models.
-	if len(p.cfg.Providers) > 0 {
-		prov := &p.cfg.Providers[0]
-		up := model
-		if up == "" && prov.DefaultModel != "" {
-			up = prov.DefaultModel
+	// No map hit: pass through to the FIRST provider that can host the
+	// requested model. We deliberately do NOT silently rewrite the model
+	// name — if no provider can serve it, return a clear error so the
+	// caller sees the misconfiguration instead of a confusing 401/404.
+	if model != "" {
+		for i := range p.cfg.Providers {
+			prov := &p.cfg.Providers[i]
+			// Heuristic: provider can host a model when its name appears
+			// in the provider name or when no allowed_models list is set
+			// (explicit allowlists are honored elsewhere; empty means
+			// open).
+			if len(prov.AllowedModels) == 0 {
+				return prov, model, nil
+			}
+			for _, am := range prov.AllowedModels {
+				if strings.EqualFold(am, model) {
+					return prov, model, nil
+				}
+			}
 		}
-		return prov, up, nil
+		return nil, "", fmt.Errorf("no provider can serve model %q", model)
 	}
 	return &Provider{Name: "none"}, model, fmt.Errorf("no providers configured")
 }

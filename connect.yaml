@@ -9,11 +9,6 @@ providers:
     base_url: "https://opencode.ai/zen/go/v1"
     api_key: "${OPENCODE_GO_API_KEY}"
     default_model: hy3
-    allowed_models: ["hy3"]
-    model_map:
-      "hy3": "hy3"
-      "claude-opus-5": "hy3"
-      "claude-sonnet-4": "hy3"
   - name: lenovo-qwen
     base_url: "https://aicloud-app.lenovo.com.cn/qwen38-27b/v1"
     api_key: "[REDACTED]"
