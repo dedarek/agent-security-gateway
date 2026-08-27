@@ -11,13 +11,18 @@ import (
 	"github.com/dedarek/agent-security-gateway/internal/otlp"
 )
 
-// RegisterOTLP mounts the OTLP/HTTP trace endpoint. Standard exporters in
-// OpenCode (experimental.openTelemetry), Claude Code, Codex, hermes-otel,
-// pi-otel and OpenClaw diagnostics-otel all POST protobuf to /v1/traces.
-// This is the telemetry channel: it never touches LLM traffic, so model
-// switches and direct-connect providers stay fully visible.
+// RegisterOTLP mounts the OTLP/HTTP trace + logs + metrics endpoints.
+// Standard exporters in OpenCode (experimental.openTelemetry), Claude Code,
+// Codex, hermes-otel, pi-otel and OpenClaw diagnostics-otel all POST protobuf
+// to /v1/<signal>. This is the telemetry channel: it never touches LLM
+// traffic, so model switches and direct-connect providers stay fully visible.
+//
+// Note: Claude Code's primary signals are METRICS and LOGS (api_request
+// events carry model info); traces are a beta flag. We accept all three.
 func (s *Server) RegisterOTLP(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/traces", s.apiOTLPTraces)
+	mux.HandleFunc("/v1/logs", s.apiOTLPLogs)
+	mux.HandleFunc("/v1/metrics", s.apiOTLPMetrics)
 }
 
 func (s *Server) apiOTLPTraces(w http.ResponseWriter, r *http.Request) {
@@ -97,6 +102,76 @@ func (s *Server) apiOTLPTraces(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/x-protobuf")
 	// ExportTraceServiceResponse is an empty message — zero bytes is valid.
 	w.WriteHeader(http.StatusOK)
+}
+
+// apiOTLPLogs accepts ExportLogsServiceRequest. Claude Code's primary
+// signal; the api_request log event carries model name. We don't deep-parse
+// the protobuf — the receipt itself is enough to mark the agent active.
+func (s *Server) apiOTLPLogs(w http.ResponseWriter, r *http.Request) {
+	s.apiOTLPGeneric(w, r, "logs")
+}
+
+// apiOTLPMetrics accepts ExportMetricsServiceRequest. Same shape as logs.
+func (s *Server) apiOTLPMetrics(w http.ResponseWriter, r *http.Request) {
+	s.apiOTLPGeneric(w, r, "metrics")
+}
+
+// apiOTLPGeneric is a lenient receiver for OTLP signals we don't fully
+// decode yet: it ACKs the payload (so exporters don't retry-loop) and
+// refreshes LastActivity on the matching registered agent.
+func (s *Server) apiOTLPGeneric(w http.ResponseWriter, r *http.Request, kind string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 16<<20))
+	if err != nil {
+		http.Error(w, "read body", http.StatusBadRequest)
+		return
+	}
+	_ = body // future: parse model/session out of logs api_request events
+	if s.Agents == nil {
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	ip := remoteHost(r.RemoteAddr)
+	agentID := strings.TrimSpace(r.Header.Get(publicAgentHeader))
+	if agentID == "" {
+		// No stable ID and no resource parse — try matching by source IP
+		// against already-registered agents (cc-switch / claude-code with
+		// proxy-managed tokens may not set service.instance.id).
+		for _, rec := range s.Agents.List() {
+			if rec.IP == ip || rec.ConnectionIP == ip {
+				agentID = rec.AgentID
+				break
+			}
+			for _, oip := range rec.ObservedIPs {
+				if oip == ip {
+					agentID = rec.AgentID
+					break
+				}
+			}
+			if agentID != "" {
+				break
+			}
+		}
+	}
+	if agentID == "" {
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if _, ok := s.Agents.Get(agentID); !ok {
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	now := time.Now().UTC()
+	_ = s.Agents.Heartbeat(agentID, ip, nil, "", "", "", "", now)
+	w.Header().Set("Content-Type", "application/x-protobuf")
+	w.WriteHeader(http.StatusOK)
+	_ = kind
 }
 
 func remoteHost(remote string) string {
