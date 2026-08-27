@@ -55,9 +55,12 @@ func TestListActiveExcludesStaleAgentsAndSorts(t *testing.T) {
 		if err := r.Upsert(Record{AgentID: id, SessionID: id + "-session"}); err != nil {
 			t.Fatal(err)
 		}
+		// Harness-level online requires recent activity, not just heartbeat.
+		_ = r.ObserveSession(id, id+"-session", time.Now().UTC())
 	}
 	r.records["zeta"] = func() Record {
 		v := r.records["zeta"]
+		v.LastActivity = time.Now().Add(-2 * time.Minute)
 		v.LastHeartbeat = time.Now().Add(-2 * time.Minute)
 		return v
 	}()

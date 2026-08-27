@@ -21,8 +21,8 @@ func TestAgentsAPIShowsOnlyCurrentRuntimeAgents(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agents.json")
 	now := time.Now().UTC()
 	fixture := map[string]agentregistry.Record{
-		"current-opencode": {AgentID: "current-opencode", SessionID: "s-1", AgentType: "opencode", LastHeartbeat: now},
-		"old-test":         {AgentID: "old-test", SessionID: "s-old", AgentType: "opencode", LastHeartbeat: now.Add(-2 * time.Minute)},
+		"current-opencode": {AgentID: "current-opencode", SessionID: "s-1", AgentType: "opencode", LastHeartbeat: now, LastActivity: now},
+		"old-test":         {AgentID: "old-test", SessionID: "s-old", AgentType: "opencode", LastHeartbeat: now.Add(-2 * time.Minute), LastActivity: now.Add(-2 * time.Minute)},
 	}
 	data, err := json.Marshal(fixture)
 	if err != nil {

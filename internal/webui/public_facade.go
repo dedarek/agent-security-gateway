@@ -197,13 +197,20 @@ func publicAgentID(r *http.Request) string {
 func publicAgentType(r *http.Request) string {
 	typ := strings.ToLower(strings.TrimSpace(r.Header.Get(publicTypeHeader)))
 	if typ == "" {
-		switch {
-		case strings.HasSuffix(strings.ToLower(r.URL.Path), "/messages"):
-			typ = "claude-code"
-		case strings.Contains(strings.ToLower(r.URL.Path), "/chat/completions"):
+		// If the caller sent a stable agent ID, trust we already know it's
+		// an opencode runtime (our default local harness). Path alone cannot
+		// distinguish opencode vs claude-code on /v1/messages.
+		if strings.TrimSpace(r.Header.Get(publicAgentHeader)) != "" {
 			typ = "opencode"
-		default:
-			typ = "claude-code"
+		} else {
+			switch {
+			case strings.HasSuffix(strings.ToLower(r.URL.Path), "/messages"):
+				typ = "claude-code"
+			case strings.Contains(strings.ToLower(r.URL.Path), "/chat/completions"):
+				typ = "opencode"
+			default:
+				typ = "claude-code"
+			}
 		}
 	}
 	if len(typ) > 64 {

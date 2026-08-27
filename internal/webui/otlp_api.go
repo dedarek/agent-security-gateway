@@ -43,6 +43,9 @@ func (s *Server) apiOTLPTraces(w http.ResponseWriter, r *http.Request) {
 	ip := remoteHost(r.RemoteAddr)
 	agentID := strings.TrimSpace(r.Header.Get(publicAgentHeader))
 	if agentID == "" {
+		agentID = otlpAgentIDFromResource(batches)
+	}
+	if agentID == "" {
 		// Stable runtime identity: machine (source IP) + agent type. Sessions
 		// and model names are deliberately excluded so they never fork rows.
 		typ := sig.AgentType
@@ -105,4 +108,15 @@ func sanitizeIDPart(v string) string {
 		return "unknown"
 	}
 	return out
+}
+
+func otlpAgentIDFromResource(batches []otlp.ResourceSpans) string {
+	for _, b := range batches {
+		for _, k := range []string{"service.instance.id", "asg.agent.id", "agent.id"} {
+			if v := strings.TrimSpace(b.ResourceAttributes[k]); v != "" {
+				return v
+			}
+		}
+	}
+	return ""
 }

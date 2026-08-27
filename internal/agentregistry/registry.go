@@ -339,7 +339,7 @@ func (r *Registry) list(activeOnly bool) []Record {
 		if strings.TrimSpace(v.AgentID) == "" {
 			continue
 		}
-		if !isActive(v.LastHeartbeat) {
+		if !isActiveRecord(v) {
 			v.Status = "offline"
 		} else {
 			v.Status = "online"
@@ -357,7 +357,7 @@ func (r *Registry) Get(agentID string) (Record, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	v, ok := r.records[agentID]
-	if ok && time.Since(v.LastHeartbeat) > 90*time.Second {
+	if ok && !isActiveRecord(v) {
 		v.Status = "offline"
 	}
 	return v, ok
@@ -365,6 +365,16 @@ func (r *Registry) Get(agentID string) (Record, bool) {
 
 func isActive(lastHeartbeat time.Time) bool {
 	return !lastHeartbeat.IsZero() && time.Since(lastHeartbeat.UTC()) <= activeWindow
+}
+
+func isActiveRecord(v Record) bool {
+	// Harness-level online = recent activity, not just probe heartbeat.
+	// Probe-only agents (no LLM/OTLP activity yet) should not appear as
+	// "online · active" after the harness is closed.
+	if v.LastActivity.IsZero() {
+		return false
+	}
+	return time.Since(v.LastActivity.UTC()) <= activeWindow
 }
 
 func (r *Registry) saveLocked() error {
