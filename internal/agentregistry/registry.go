@@ -129,6 +129,10 @@ func (r *Registry) Upsert(in Record) error {
 		if in.Isolation == "" {
 			in.Isolation = old.Isolation
 		}
+		// Preserve last activity if incoming has none (heartbeat-only Upsert).
+		if in.LastActivity.IsZero() {
+			in.LastActivity = old.LastActivity
+		}
 		in.StateChangedAt = old.StateChangedAt
 		in.StateChangedBy = old.StateChangedBy
 		if in.ObservedModel == "" {
@@ -193,8 +197,11 @@ func (r *Registry) Heartbeat(agentID, ip string, observedIPs []string, model, pr
 	}
 	now := time.Now().UTC()
 	v.LastHeartbeat = now
-	if activity.After(v.LastActivity) {
+	if !activity.IsZero() && activity.After(v.LastActivity) {
 		v.LastActivity = activity
+	} else if v.LastActivity.IsZero() && !now.IsZero() {
+		// If caller didn't supply activity but heartbeat is fresh, keep
+		// existing activity; don't overwrite a valid one with zero.
 	}
 	if ip != "" {
 		if v.IP != ip {

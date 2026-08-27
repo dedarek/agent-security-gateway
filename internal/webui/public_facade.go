@@ -32,6 +32,11 @@ func (s *Server) RegisterPublicLLM(mux *http.ServeMux, upstreamBase string) {
 // runs. It intentionally does not grant operator permissions.
 func (s *Server) WrapPublicMCP(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Don't invent a public-* agent for header-less local probes.
+		if strings.TrimSpace(r.Header.Get(publicAgentHeader)) == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		s.TrackPublicAgent(r, "mcp")
 		next.ServeHTTP(w, r)
 	})
@@ -57,6 +62,39 @@ func (s *Server) publicLLM(w http.ResponseWriter, r *http.Request) {
 		Stream bool   `json:"stream"`
 	}
 	_ = json.Unmarshal(body, &requestMeta)
+
+	// Don't create a public agent for empty-model probe/404 noise.
+	if strings.TrimSpace(requestMeta.Model) == "" {
+		// Still proxy to let caller get proper error, but don't pollute registry.
+		u, err := url.Parse(s.publicLLMUpstream + r.URL.Path)
+		if err != nil {
+			http.Error(w, "invalid LLM upstream", http.StatusInternalServerError)
+			return
+		}
+		u.RawQuery = r.URL.RawQuery
+		upReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, u.String(), bytes.NewReader(body))
+		if err != nil {
+			http.Error(w, "create LLM upstream request", http.StatusInternalServerError)
+			return
+		}
+		copyForwardHeaders(upReq.Header, r.Header)
+		upReq.Header.Del("Authorization")
+		upReq.Header.Del("X-Api-Key")
+		resp, err := http.DefaultClient.Do(upReq)
+		if err != nil {
+			http.Error(w, "LLM upstream unavailable", http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		for k, values := range resp.Header {
+			for _, value := range values {
+				w.Header().Add(k, value)
+			}
+		}
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+		return
+	}
 
 	agentID := publicAgentID(r)
 	sessionID := r.Header.Get(publicSessionHeader)
