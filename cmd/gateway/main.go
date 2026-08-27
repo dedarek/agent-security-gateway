@@ -203,6 +203,10 @@ func serveCmd(args []string) {
 	uiSrv.RegisterMonitorAPI(uiMux)
 	uiSrv.RegisterStatusAPI(uiMux, kgBridgeInst, emitter, mon)
 	uiSrv.RegisterPolicyAPI(uiMux)
+	// OTLP/HTTP telemetry channel: OpenCode/Claude Code/Codex/OpenClaw/
+	// Hermes/Pi exporters push traces here. Visibility is decoupled from
+	// the proxy path — direct-connect models stay observable.
+	uiSrv.RegisterOTLP(uiMux)
 
 	// Semantica Explorer proxied into the console (unified interface).
 	webui.RegisterExplorerProxy(uiMux, cfg.ExplorerURL, cfg.ExplorerAPIKey)
