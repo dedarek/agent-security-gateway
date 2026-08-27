@@ -43,7 +43,11 @@ func (s *Server) apiAgents(w http.ResponseWriter, r *http.Request) {
 
 	out := []*AgentInfo{}
 	if s.Agents != nil {
-		for _, rec := range s.Agents.ListActive() {
+		for _, rec := range s.Agents.List() {
+			// Only registered agents (probe-backed) are shown.
+			if rec.ProbeID == "" && rec.MachineID == "" {
+				continue
+			}
 			sid := rec.SessionID
 			if sid == "" {
 				sid = rec.AgentID
