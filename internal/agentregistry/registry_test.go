@@ -60,8 +60,8 @@ func TestListActiveExcludesStaleAgentsAndSorts(t *testing.T) {
 	}
 	r.records["zeta"] = func() Record {
 		v := r.records["zeta"]
-		v.LastActivity = time.Now().Add(-2 * time.Minute)
-		v.LastHeartbeat = time.Now().Add(-2 * time.Minute)
+		v.LastActivity = time.Now().Add(-6 * time.Minute)
+		v.LastHeartbeat = time.Now().Add(-6 * time.Minute)
 		return v
 	}()
 	active := r.ListActive()

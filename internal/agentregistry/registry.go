@@ -58,7 +58,7 @@ var validIsolation = map[string]bool{
 	"active": true, "paused": true, "restricted": true, "isolated": true,
 }
 
-const activeWindow = 90 * time.Second
+const activeWindow = 5 * time.Minute
 
 type Registry struct {
 	mu      sync.RWMutex
