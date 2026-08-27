@@ -46,13 +46,27 @@ func (s *Server) apiOTLPTraces(w http.ResponseWriter, r *http.Request) {
 		agentID = otlpAgentIDFromResource(batches)
 	}
 	if agentID == "" {
-		// Stable runtime identity: machine (source IP) + agent type. Sessions
-		// and model names are deliberately excluded so they never fork rows.
+		// Fallback IP+type only if that fallback row was already registered.
 		typ := sig.AgentType
 		if typ == "" {
 			typ = "unknown"
 		}
-		agentID = "otel-" + sanitizeIDPart(ip) + "-" + sanitizeIDPart(typ)
+		candidate := "otel-" + sanitizeIDPart(ip) + "-" + sanitizeIDPart(typ)
+		if _, ok := s.Agents.Get(candidate); ok {
+			agentID = candidate
+		}
+	}
+	if agentID == "" {
+		// No stable ID and no registration — don't invent a row.
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	// Only registered agents are shown. OTLP just refreshes them.
+	if _, ok := s.Agents.Get(agentID); !ok {
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		w.WriteHeader(http.StatusOK)
+		return
 	}
 	now := time.Now().UTC()
 	activity := sig.Latest

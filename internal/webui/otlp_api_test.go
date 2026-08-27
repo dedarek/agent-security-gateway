@@ -84,6 +84,8 @@ func newOTLPServer(t *testing.T) (*Server, *agentregistry.Registry, *http.ServeM
 
 func TestOTLPTracesCreateAndUpdateAgent(t *testing.T) {
 	_, reg, mux := newOTLPServer(t)
+	// OTLP now only refreshes already-registered agents.
+	_ = reg.Upsert(agentregistry.Record{AgentID: "otel-203.0.113.7-opencode", ProbeID: "probe-otel", MachineID: "m-otel", LastHeartbeat: time.Now(), LastActivity: time.Now()})
 
 	post := func(model, session string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/v1/traces",
@@ -128,6 +130,7 @@ func TestOTLPTracesCreateAndUpdateAgent(t *testing.T) {
 
 func TestOTLPTracesExplicitAgentID(t *testing.T) {
 	_, reg, mux := newOTLPServer(t)
+	_ = reg.Upsert(agentregistry.Record{AgentID: "local-yycserver", ProbeID: "probe-local", MachineID: "m-local", LastHeartbeat: time.Now(), LastActivity: time.Now()})
 	req := httptest.NewRequest(http.MethodPost, "/v1/traces",
 		bytes.NewReader(buildTracesPayload("hy3", "s-9")))
 	req.Header.Set(publicAgentHeader, "local-yycserver")

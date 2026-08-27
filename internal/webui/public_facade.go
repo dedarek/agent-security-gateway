@@ -148,8 +148,13 @@ func (s *Server) TrackPublicAgent(r *http.Request, model string) string {
 	if s.Agents == nil {
 		return publicAgentID(r)
 	}
-	now := time.Now().UTC()
 	agentID := publicAgentID(r)
+	// Only registered agents are shown. Don't invent a new row from
+	// traffic alone; let OTLP/LLM just refresh an already-registered one.
+	if _, ok := s.Agents.Get(agentID); !ok {
+		return agentID
+	}
+	now := time.Now().UTC()
 	sessionID := r.Header.Get(publicSessionHeader)
 	if sessionID == "" {
 		sessionID = agentID + "-session"

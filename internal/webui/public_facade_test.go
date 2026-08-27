@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dedarek/agent-security-gateway/internal/agentregistry"
 	"github.com/dedarek/agent-security-gateway/internal/store"
@@ -40,6 +41,8 @@ func TestPublicLLMFacadeTracksAgentAndKeepsProviderCredentialInternal(t *testing
 	defer upstream.Close()
 
 	s, reg := newPublicTestServer(t)
+	// Registered agent is required; public traffic only refreshes it.
+	_ = reg.Upsert(agentregistry.Record{AgentID: "agent-public-test", ProbeID: "probe-test", MachineID: "m-test", LastHeartbeat: time.Now(), LastActivity: time.Now()})
 	mux := http.NewServeMux()
 	s.RegisterPublicLLM(mux, upstream.URL)
 
@@ -79,6 +82,7 @@ func storedEventArguments(s *Server) []byte {
 
 func TestPublicMCPTrackingDoesNotOverwriteLLMModel(t *testing.T) {
 	s, reg := newPublicTestServer(t)
+	_ = reg.Upsert(agentregistry.Record{AgentID: "agent-same", ProbeID: "probe-same", MachineID: "m-same", LastHeartbeat: time.Now(), LastActivity: time.Now()})
 	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader("{}"))
 	req.Header.Set("X-ASG-Agent-ID", "agent-same")
 	req.Header.Set("X-ASG-Session", "session-same")
@@ -96,6 +100,8 @@ func TestPublicMCPTrackingDoesNotOverwriteLLMModel(t *testing.T) {
 
 func TestPublicTrackingSeparatesRuntimeTypesButNotSessions(t *testing.T) {
 	s, reg := newPublicTestServer(t)
+	// This test verifies legacy fallback before the "registered only" guard;
+	// it now expects no auto-created rows when no agent is registered.
 	openCode := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{}"))
 	openCode.RemoteAddr = "203.0.113.9:1001"
 	openCode.Header.Set("X-ASG-Session", "opencode-session-1")
@@ -107,10 +113,7 @@ func TestPublicTrackingSeparatesRuntimeTypesButNotSessions(t *testing.T) {
 	s.TrackPublicAgent(claude, "claude-sonnet-4-6")
 
 	records := reg.List()
-	if len(records) != 2 {
-		t.Fatalf("runtime records = %#v", records)
-	}
-	if records[0].AgentType != "claude-code" || records[1].AgentType != "opencode" {
-		t.Fatalf("runtime types = %#v", records)
+	if len(records) != 0 {
+		t.Fatalf("unregistered public tracking should not create rows, got %#v", records)
 	}
 }
