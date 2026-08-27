@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -19,10 +20,16 @@ import (
 //
 // Note: Claude Code's primary signals are METRICS and LOGS (api_request
 // events carry model info); traces are a beta flag. We accept all three.
+//
+// We also expose a plain JSON /api/activity endpoint used by harnesses that
+// have hook mechanisms (Claude Code PreToolUse/PostToolUse, OpenCode plugins,
+// Codex notify scripts). It is a fallback for harnesses whose OTLP exporter
+// is unreliable — hooks POST JSON via curl and never block the main loop.
 func (s *Server) RegisterOTLP(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/traces", s.apiOTLPTraces)
 	mux.HandleFunc("/v1/logs", s.apiOTLPLogs)
 	mux.HandleFunc("/v1/metrics", s.apiOTLPMetrics)
+	mux.HandleFunc("/api/activity", s.apiAgentActivity)
 }
 
 func (s *Server) apiOTLPTraces(w http.ResponseWriter, r *http.Request) {
@@ -102,6 +109,64 @@ func (s *Server) apiOTLPTraces(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/x-protobuf")
 	// ExportTraceServiceResponse is an empty message — zero bytes is valid.
 	w.WriteHeader(http.StatusOK)
+}
+
+// apiAgentActivity is the generic activity beacon for harnesses with hook
+// mechanisms (Claude Code PostToolUse, OpenCode plugin callbacks, Codex
+// notify). Plain JSON POST, no protobuf. Body:
+//   {"agent_id":"...","agent_type":"...","model":"...","session_id":"...","event":"tool_use"}
+// All fields optional except agent_id. Registered agents only.
+func (s *Server) apiAgentActivity(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.Agents == nil {
+		writeJSON(w, map[string]string{"status": "ok"})
+		return
+	}
+	var body struct {
+		AgentID   string `json:"agent_id"`
+		AgentType string `json:"agent_type"`
+		Model     string `json:"model"`
+		SessionID string `json:"session_id"`
+		Event     string `json:"event"`
+	}
+	_ = json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&body)
+	agentID := strings.TrimSpace(body.AgentID)
+	if agentID == "" {
+		agentID = strings.TrimSpace(r.Header.Get(publicAgentHeader))
+	}
+	if agentID == "" {
+		writeJSON(w, map[string]string{"status": "ignored", "reason": "no agent_id"})
+		return
+	}
+	if _, ok := s.Agents.Get(agentID); !ok {
+		writeJSON(w, map[string]string{"status": "ignored", "reason": "not registered"})
+		return
+	}
+	ip := remoteHost(r.RemoteAddr)
+	now := time.Now().UTC()
+	// Hook-driven activity is real activity: advance LastActivity so the
+	// 5-minute online window actually reflects hook events, not just LLM/OTLP.
+	if body.Model != "" {
+		_ = s.Agents.ObserveModel(agentID, body.Model, "", now)
+	}
+	if body.SessionID != "" {
+		_ = s.Agents.ObserveSession(agentID, body.SessionID, now)
+	}
+	// If hook carried no model/session (pure ping), still mark active.
+	if body.Model == "" && body.SessionID == "" {
+		_ = s.Agents.Heartbeat(agentID, ip, nil, "", "", body.AgentType, "", now)
+		// Force LastActivity forward — Heartbeat doesn't do this anymore.
+		if rec, ok := s.Agents.Get(agentID); ok && rec.LastActivity.Before(now) {
+			rec.LastActivity = now
+			_ = s.Agents.Upsert(rec)
+		}
+	} else {
+		_ = s.Agents.Heartbeat(agentID, ip, nil, "", "", body.AgentType, "", now)
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 // apiOTLPLogs accepts ExportLogsServiceRequest. Claude Code's primary
