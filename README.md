@@ -11,6 +11,30 @@
 
 ---
 
+## 0. 一行接入（任何 agent / 任何设备）
+
+接入后的 agent 在控制台实时可见：当前模型 / 活跃会话 / 最后活动时间（北京时间）/ 在线状态。
+
+**支持 OpenTelemetry 的 harness**（Claude Code / OpenCode / Codex / Gemini CLI / Hermes / OpenClaw / Pi 等所有内置 OTel 的 agent）——复制下面这段进 shell rc 或启动 env：
+
+```bash
+export CLAUDE_CODE_ENABLE_TELEMETRY=1   # Claude Code 必须；其他 harness 可省
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://asg-gateway.vip.cpolar.cn
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+export OTEL_SERVICE_NAME=<harness-name>          # 例：claude-code / opencode / codex
+export OTEL_RESOURCE_ATTRIBUTES=service.instance.id=<stable-agent-id>
+# 注册一次（只需一次，之后零维护）：
+curl -X POST https://asg-gateway.vip.cpolar.cn/api/agents/register \
+  -H "Content-Type: application/json" \
+  -d "{\"agent_id\":\"<stable-agent-id>\",\"agent_type\":\"<harness-name>\",\"agent_alias\":\"<display-name>\",\"tenant_name\":\"local\",\"tenant_key\":\"dev-key\"}"
+```
+
+之后 agent **完全无感**：换模型、换会话、换 IP 都自动归到同一行；控制台只显示**已注册**的 agent，5 分钟无真实活动自动转 `offline` 灰色（不消失）。
+
+**不支持 OTel 的 harness**（闭源 desktop agent、WorkBuddy 等）：用 `asg-connect` 探针接管它的 `ANTHROPIC_BASE_URL` / OpenAI base url（见 §3）。
+
+---
+
 ## 1. 它是什么
 
 各种 Agent Runtime（Claude Code / Codex / LangGraph / AutoGen / 自研 Agent）把工具/MCP 调用
