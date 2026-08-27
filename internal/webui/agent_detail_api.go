@@ -6,10 +6,13 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/dedarek/agent-security-gateway/api"
 	"github.com/dedarek/agent-security-gateway/internal/agentregistry"
 )
+
+var beijingDetail = time.FixedZone("CST", 8*3600)
 
 var secretText = regexp.MustCompile(`(?i)(bearer\s+|api[_-]?key\s*[=:]\s*|token\s*[=:]\s*|password\s*[=:]\s*|secret\s*[=:]\s*)[^\s,;]+`)
 
@@ -108,7 +111,7 @@ func safeEvent(ev api.Event, model string) map[string]any {
 	}
 	return map[string]any{
 		"call_id":       ev.Call.CallID,
-		"timestamp":     ev.Timestamp.Format("2006-01-02 15:04:05"),
+		"timestamp":     ev.Timestamp.In(beijingDetail).Format("2006-01-02 15:04:05"),
 		"session_id":    ev.SessionID,
 		"trace_id":      ev.TraceID,
 		"tool":          ev.Call.ToolID,
@@ -145,7 +148,7 @@ func lastEventTime(events []api.Event) string {
 	if len(events) == 0 {
 		return ""
 	}
-	return events[len(events)-1].Timestamp.Format("2006-01-02 15:04:05")
+	return events[len(events)-1].Timestamp.In(beijingDetail).Format("2006-01-02 15:04:05")
 }
 
 func safeText(b []byte, limit int) string {

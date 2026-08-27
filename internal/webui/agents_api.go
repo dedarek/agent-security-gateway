@@ -3,7 +3,17 @@ package webui
 import (
 	"net/http"
 	"strings"
+	"time"
 )
+
+var beijing = time.FixedZone("CST", 8*3600)
+
+func fmtBeijing(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.In(beijing).Format("2006-01-02 15:04:05")
+}
 
 // apiAgents returns registered agents enriched with observed event statistics.
 func (s *Server) apiAgents(w http.ResponseWriter, r *http.Request) {
@@ -32,7 +42,7 @@ func (s *Server) apiAgents(w http.ResponseWriter, r *http.Request) {
 			v.UserID = p.UserID
 		}
 		v.EventCount++
-		v.LastActivity = e.Timestamp.Format("2006-01-02 15:04:05")
+		v.LastActivity = fmtBeijing(e.Timestamp)
 		if strings.HasPrefix(e.Call.ToolID, "llm.") {
 			v.Model = strings.TrimPrefix(e.Call.ToolID, "llm.")
 		}
@@ -89,11 +99,11 @@ func (s *Server) apiAgents(w http.ResponseWriter, r *http.Request) {
 			if v.SessionCount == 0 && sid != "" {
 				v.SessionCount = 1
 			}
-			v.RegisteredAt = rec.RegisteredAt.Format("2006-01-02 15:04:05")
-			v.LastHeartbeat = rec.LastHeartbeat.Format("2006-01-02 15:04:05")
+			v.RegisteredAt = fmtBeijing(rec.RegisteredAt)
+			v.LastHeartbeat = fmtBeijing(rec.LastHeartbeat)
 			v.RestartCount = rec.RestartCount
 			if v.LastActivity == "" {
-				v.LastActivity = rec.LastActivity.Format("2006-01-02 15:04:05")
+				v.LastActivity = fmtBeijing(rec.LastActivity)
 			}
 			out = append(out, v)
 		}

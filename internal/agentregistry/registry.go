@@ -197,12 +197,9 @@ func (r *Registry) Heartbeat(agentID, ip string, observedIPs []string, model, pr
 	}
 	now := time.Now().UTC()
 	v.LastHeartbeat = now
-	if !activity.IsZero() && activity.After(v.LastActivity) {
-		v.LastActivity = activity
-	} else if v.LastActivity.IsZero() && !now.IsZero() {
-		// If caller didn't supply activity but heartbeat is fresh, keep
-		// existing activity; don't overwrite a valid one with zero.
-	}
+	// Heartbeat only refreshes LastHeartbeat; LastActivity is driven by
+	// real harness activity (OTLP/LLM) via ObserveModel/ObserveSession,
+	// so idle probe heartbeats don't keep a closed harness "always online".
 	if ip != "" {
 		if v.IP != ip {
 			v.Changes = append(v.Changes, Change{At: now, Field: "ip", From: v.IP, To: ip, Source: "heartbeat"})

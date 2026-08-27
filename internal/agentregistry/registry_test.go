@@ -91,12 +91,16 @@ func TestUpsertHeartbeatAndPersistence(t *testing.T) {
 	if !ok || got.RestartCount != 1 {
 		t.Fatalf("expected one record and one restart, got ok=%v count=%d", ok, got.RestartCount)
 	}
+	// Heartbeat alone doesn't drive online; need real activity first.
+	if err := r.ObserveSession("a-1", "s-1", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
 	if err := r.Heartbeat("a-1", "10.0.0.2", []string{"10.0.0.2"}, "model-2", "provider-2", "opencode", "Agent A", time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = r.Get("a-1")
 	if got.Status != "online" || got.IP != "10.0.0.2" {
-		t.Fatalf("expected heartbeat IP, got %q", got.IP)
+		t.Fatalf("expected heartbeat IP, got %q status %q", got.IP, got.Status)
 	}
 	if err := r.ObserveModel("a-1", "actual-model", "", time.Now().UTC()); err != nil {
 		t.Fatal(err)
