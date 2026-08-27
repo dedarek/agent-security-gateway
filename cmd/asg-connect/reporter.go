@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
 )
 
 // traceID returns a stable per-session task id, rotated when the session goes
@@ -50,8 +49,8 @@ type reporter struct {
 	lastSeen    map[string]time.Time
 	lastLLMCall map[string]string
 	tenantName  string
+	agentID     string
 }
-
 
 // getOrCreateTraceLocked must be called with r.mu held.
 func (r *reporter) getOrCreateTraceLocked(session string) string {
@@ -71,7 +70,7 @@ func (r *reporter) lastLLMLocked(session string) string {
 	return r.lastLLMCall[session]
 }
 
-func newReporter(hubURL, key, spoolPath, tenantName string) *reporter {
+func newReporter(hubURL, key, spoolPath, tenantName, agentID string) *reporter {
 	r := &reporter{
 		hubURL:      hubURL,
 		key:         key,
@@ -81,6 +80,7 @@ func newReporter(hubURL, key, spoolPath, tenantName string) *reporter {
 		lastSeen:    map[string]time.Time{},
 		lastLLMCall: map[string]string{},
 		tenantName:  tenantName,
+		agentID:     agentID,
 	}
 	return r
 }
@@ -100,6 +100,7 @@ func (r *reporter) ReportLLM(sessionID, model string, reqBody, respBody []byte, 
 		"trace_id":    traceID,
 		"parent_id":   llmCallID,
 		"tenant_name": r.tenantName,
+		"agent_id":    r.agentID,
 		"principal":   r.tenantName,
 		"role":        "employee",
 		"model":       model,
@@ -120,17 +121,18 @@ func (r *reporter) ReportTool(sessionID, toolID string, args []byte, verdict str
 	r.mu.Unlock()
 
 	ev := map[string]any{
-		"kind":       "tool_call",
-		"session":    sessionID,
-		"trace_id":   traceID,
-		"parent_id":  parent,
+		"kind":        "tool_call",
+		"session":     sessionID,
+		"trace_id":    traceID,
+		"parent_id":   parent,
 		"tenant_name": r.tenantName,
-		"principal":  r.tenantName,
-		"role":       "employee",
-		"tool":       toolID,
-		"args":      jsonRaw(args),
-		"verdict":   verdict,
-		"reason":    reason,
+		"agent_id":    r.agentID,
+		"principal":   r.tenantName,
+		"role":        "employee",
+		"tool":        toolID,
+		"args":        jsonRaw(args),
+		"verdict":     verdict,
+		"reason":      reason,
 	}
 	r.enqueue(ev)
 }
@@ -177,7 +179,9 @@ func (r *reporter) ship(batch []byte) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/x-ndjson")
-	req.Header.Set("Authorization", "Bearer "+r.key)
+	if r.key != "" {
+		req.Header.Set("Authorization", "Bearer "+r.key)
+	}
 	resp, err := r.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("hub ingest: %w", err)
@@ -199,7 +203,9 @@ func (r *reporter) hubCheck(ctx context.Context, sessionID, toolID string, args 
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+r.key)
+	if r.key != "" {
+		req.Header.Set("Authorization", "Bearer "+r.key)
+	}
 	resp, err := r.client.Do(req)
 	if err != nil {
 		return "", err
@@ -231,4 +237,3 @@ func appendFile(path string, b []byte) error {
 var logFatalf = logPrintf
 
 func jsonRaw(b []byte) json.RawMessage { return json.RawMessage(b) }
-

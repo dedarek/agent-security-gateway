@@ -25,11 +25,11 @@ func (p *llmProxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var in struct {
-		Model    string `json:"model"`
-		Stream   bool   `json:"stream"`
-		Input    json.RawMessage `json:"input"`
-		Instructions string   `json:"instructions"`
-		Tools    []map[string]any `json:"tools"`
+		Model        string           `json:"model"`
+		Stream       bool             `json:"stream"`
+		Input        json.RawMessage  `json:"input"`
+		Instructions string           `json:"instructions"`
+		Tools        []map[string]any `json:"tools"`
 	}
 	if err := json.Unmarshal(body, &in); err != nil {
 		http.Error(w, "bad json: "+err.Error(), 400)
@@ -139,6 +139,7 @@ func (p *llmProxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+prov.APIKey)
+	req.Header.Set("x-api-key", prov.APIKey)
 
 	client := &http.Client{Timeout: 5 * time.Minute}
 	resp, err := client.Do(req)
@@ -208,7 +209,7 @@ func (p *llmProxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 			return map[string]any{
 				"id": respID, "object": "response", "status": status,
 				"model": in.Model, "output": out,
-				"usage":        map[string]any{"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+				"usage":               map[string]any{"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
 				"parallel_tool_calls": false,
 			}
 		}

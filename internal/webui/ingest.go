@@ -19,7 +19,7 @@ func (s *Server) RegisterIngest(mux *http.ServeMux) {
 // auth==nil means open (dev mode); otherwise a request without a valid key gets 401.
 func (s *Server) RegisterIngestWithAuth(mux *http.ServeMux, auth func(header string) bool) {
 	mux.HandleFunc("/api/ingest", func(w http.ResponseWriter, r *http.Request) {
-		if auth != nil && !auth(r.Header.Get("Authorization")) {
+		if auth := s.effectiveIngestAuth(auth); auth != nil && !auth(r.Header.Get("Authorization")) {
 			http.Error(w, "unauthorized", 401)
 			return
 		}
@@ -44,10 +44,36 @@ func (s *Server) apiIngest(w http.ResponseWriter, r *http.Request) {
 		if json.Unmarshal([]byte(line), &raw) != nil {
 			continue
 		}
-		s.Store.Write(normalizeProbeEvent(raw))
+		if s.agentIngressOpen {
+			if agentID, _ := raw["agent_id"].(string); strings.TrimSpace(agentID) == "" {
+				continue
+			}
+		}
+		ev := s.normalizeIngressEvent(raw)
+		if s.Agents != nil && strings.HasPrefix(ev.Call.ToolID, "llm.") && ev.Call.Principal.AgentID != "" {
+			_ = s.Agents.ObserveModel(ev.Call.Principal.AgentID, strings.TrimPrefix(ev.Call.ToolID, "llm."), "", ev.Timestamp)
+		}
+		s.Store.Write(ev)
 		n++
 	}
 	writeJSON(w, map[string]int{"accepted": n})
+}
+
+// normalizeIngressEvent separates public telemetry identity from the
+// client-supplied tenant and role fields. AgentID remains available for
+// Registry correlation, but it does not grant permissions.
+func (s *Server) normalizeIngressEvent(raw map[string]any) api.Event {
+	if !s.agentIngressOpen {
+		return normalizeProbeEvent(raw)
+	}
+	public := make(map[string]any, len(raw)+3)
+	for k, v := range raw {
+		public[k] = v
+	}
+	public["tenant_name"] = "public-ingress"
+	public["principal"] = "public-ingress"
+	public["role"] = "observer"
+	return normalizeProbeEvent(public)
 }
 
 // normalizeProbeEvent maps a probe record into the shared Event schema.
@@ -69,22 +95,26 @@ func normalizeProbeEvent(raw map[string]any) api.Event {
 	if p, ok := raw["parent"].(string); ok {
 		ev.ParentID = p
 	}
-	// Extract tenant identity from probe events
 	tenantName, _ := raw["tenant_name"].(string)
+	agentID, _ := raw["agent_id"].(string)
+	if agentID == "" {
+		agentID = tenantName
+	}
 	principal, _ := raw["principal"].(string)
 	role, _ := raw["role"].(string)
 	switch kind {
 	case "llm_call":
 		model, _ := raw["model"].(string)
 		ev.Call = api.ToolCall{
-			CallID:   idFor(session, "llm"),
-			ToolID:   "llm." + model,
-			Action:   "read",
+			CallID:    idFor(session, "llm"),
+			ToolID:    "llm." + model,
+			Action:    "read",
 			Arguments: mustJSONField(raw["request"]),
 			Principal: api.Principal{
-				UserID:  principal,
-				AgentID: tenantName,
-				Role:    role,
+				UserID:    principal,
+				AgentID:   agentID,
+				SessionID: session,
+				Role:      role,
 			},
 		}
 		if resp := mustJSONField(raw["response"]); len(resp) > 0 {
@@ -104,9 +134,10 @@ func normalizeProbeEvent(raw map[string]any) api.Event {
 			Action:    "write",
 			Arguments: mustJSONField(raw["args"]),
 			Principal: api.Principal{
-				UserID:  principal,
-				AgentID: tenantName,
-				Role:    role,
+				UserID:    principal,
+				AgentID:   agentID,
+				SessionID: session,
+				Role:      role,
 			},
 		}
 		ev.Decision = decisionFromVerdict(verdictStr, reason)

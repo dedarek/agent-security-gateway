@@ -28,9 +28,10 @@ import (
 
 // Ingress serves the gateway-facing MCP server.
 type Ingress struct {
-	Gateway *proxy.Gateway
-	Mux     *http.ServeMux
-	Auth    *authn.Registry // nil => bootstrap single dev tenant
+	Gateway        *proxy.Gateway
+	Mux            *http.ServeMux
+	Auth           *authn.Registry // nil => bootstrap single dev tenant
+	AllowAnonymous bool
 }
 
 // principalFor maps an authenticated tenant to the decision-plane identity.
@@ -82,16 +83,23 @@ func (ing *Ingress) mcpServer(upstream *upstreamSurface) *mcp.Server {
 				var ok bool
 				tenant, ok = ing.Auth.Authenticate(headerFromCtx(ctx))
 				if !ok {
-					return &mcp.CallToolResult{
-						Content: []mcp.Content{&mcp.TextContent{Text: "unauthorized: unknown or disabled API key"}},
-						IsError: true,
-					}, nil
+					if ing.AllowAnonymous {
+						tenant = authn.Tenant{Name: "public", Role: "employee", UserID: "public", Enabled: true}
+					} else {
+						return &mcp.CallToolResult{
+							Content: []mcp.Content{&mcp.TextContent{Text: "unauthorized: unknown or disabled API key"}},
+							IsError: true,
+						}, nil
+					}
 				}
 			}
-
+			principal := principalForWithSession(tenant, sessionFromCtx(ctx))
+			if agentID := agentIDFromCtx(ctx); agentID != "" {
+				principal.AgentID = agentID
+			}
 			call := &api.ToolCall{
 				CallID:    fmt.Sprintf("ing-%s-%d", req.Params.Name, time.Now().UnixNano()),
-				Principal: principalForWithSession(tenant, sessionFromCtx(ctx)),
+				Principal: principal,
 				ToolID:    "gw." + toolName,
 				Resource:  "gw",
 				Action:    actionFor(toolName),
@@ -123,31 +131,40 @@ func (ing *Ingress) mcpServer(upstream *upstreamSurface) *mcp.Server {
 // Serve starts the HTTP listener. It dials the upstream first so the published
 // tool list is the real one.
 func Serve(ctx context.Context, listen string, gw *proxy.Gateway, upstreamCmd []string, authRegistry *authn.Registry) error {
-	surface, err := DialUpstream(ctx, upstreamCmd)
+	handler, closeFn, err := NewHandler(ctx, gw, upstreamCmd, authRegistry, false)
 	if err != nil {
-		return fmt.Errorf("dial upstream for ingress: %w", err)
+		return err
 	}
-	defer surface.Close()
+	defer closeFn()
 
-	ing := &Ingress{Gateway: gw, Mux: http.NewServeMux(), Auth: authRegistry}
-	handler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
-		return ing.mcpServer(surface)
-	}, &mcp.StreamableHTTPOptions{Stateless: true})
-	// Install the Authorization header into the request context so tool
-	// handlers can resolve the tenant identity.
-	ing.Mux.Handle("/mcp", injectAuthHeader(handler))
-	ing.Mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", handler)
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
 
 	log.Printf("[ingress] gateway MCP server listening on %s (endpoint /mcp)", listen)
-	srv := &http.Server{Addr: listen, Handler: ing.Mux}
+	srv := &http.Server{Addr: listen, Handler: mux}
 	err = srv.ListenAndServe()
 	if err == http.ErrServerClosed {
 		return nil
 	}
 	return err
+}
+
+// NewHandler builds a reusable MCP HTTP handler. The public WebUI facade uses
+// the same decision engine without exposing the central :8080 listener.
+func NewHandler(ctx context.Context, gw *proxy.Gateway, upstreamCmd []string, authRegistry *authn.Registry, allowAnonymous bool) (http.Handler, func(), error) {
+	surface, err := DialUpstream(ctx, upstreamCmd)
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("dial upstream for ingress: %w", err)
+	}
+	ing := &Ingress{Gateway: gw, Mux: http.NewServeMux(), Auth: authRegistry, AllowAnonymous: allowAnonymous}
+	mcpHandler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
+		return ing.mcpServer(surface)
+	}, &mcp.StreamableHTTPOptions{Stateless: true, DisableLocalhostProtection: allowAnonymous})
+	return injectAuthHeader(mcpHandler), func() { _ = surface.Close() }, nil
 }
 
 func sessionFromCtx(ctx context.Context) string {
@@ -170,15 +187,27 @@ func headerFromCtx(ctx context.Context) string {
 
 type authHeaderKey struct{}
 
-// injectAuthHeader copies Authorization + optional X-ASG-Session into the context.
+// injectAuthHeader copies Authorization + optional X-ASG-Session and X-ASG-Agent-ID.
 func injectAuthHeader(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := context.WithValue(r.Context(), authHeaderKey{}, r.Header.Get("Authorization"))
 		if sid := r.Header.Get("X-ASG-Session"); sid != "" {
 			ctx = context.WithValue(ctx, sessionHeaderKey{}, sid)
 		}
+		if aid := r.Header.Get("X-ASG-Agent-ID"); aid != "" {
+			ctx = context.WithValue(ctx, agentIDHeaderKey{}, aid)
+		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+type agentIDHeaderKey struct{}
+
+func agentIDFromCtx(ctx context.Context) string {
+	if v, ok := ctx.Value(agentIDHeaderKey{}).(string); ok {
+		return v
+	}
+	return ""
 }
 
 // actionFor maps a tool name to the coarse action verb used by receipts.

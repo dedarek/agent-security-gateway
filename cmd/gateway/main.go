@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/dedarek/agent-security-gateway/api"
+	"github.com/dedarek/agent-security-gateway/internal/agentregistry"
 	"github.com/dedarek/agent-security-gateway/internal/approval"
 	"github.com/dedarek/agent-security-gateway/internal/audit"
 	"github.com/dedarek/agent-security-gateway/internal/authn"
@@ -110,6 +111,10 @@ func serveCmd(args []string) {
 	if evStore != nil {
 		auditSink = multiSink{audit.StdoutSink{}, evStore}
 	}
+	agentReg, err := agentregistry.Open("./data/agents.json")
+	if err != nil {
+		log.Fatalf("agent registry: %v", err)
+	}
 
 	perm, err := engine.NewPermissionEngineFromFile(cfg.CedarPolicyPath)
 	if err != nil {
@@ -160,6 +165,7 @@ func serveCmd(args []string) {
 		Judge:      judgeInst,
 		KGBuilder:  kgBuilder,
 		KGBridge:   kgBridgeInst,
+		Agents:     agentReg,
 	}
 	log.Printf("[gateway] engines ready; policy hash %s", gw.PolicyHash)
 
@@ -171,14 +177,25 @@ func serveCmd(args []string) {
 		log.Fatalf("registry: %v", err)
 	}
 	uiSrv := webui.New(evStore, approvals, hub)
+	uiSrv.SetAgentRegistry(agentReg)
 	uiSrv.SetIngestAuth(func(header string) bool {
 		_, ok := authReg.Authenticate(header)
 		return ok
 	})
+	// Agent onboarding and telemetry are keyless. Operator APIs retain cookie
+	// auth, while the central MCP ingress retains tenant authentication.
+	uiSrv.SetAgentIngressOpen(true)
 	uiSrv.SetEmitter(emitter)
 	uiSrv.SetJudge(judgeInst)
 	uiSrv.SetMonitor(mon)
 	uiSrv.SetStore(store_)
+	publicMCP, closePublicMCP, err := ingress.NewHandler(ctx, gw, cfg.UpstreamCommand, authReg, true)
+	if err != nil {
+		log.Fatalf("public MCP facade: %v", err)
+	}
+	defer closePublicMCP()
+	uiSrv.RegisterPublicLLM(uiMux, cfg.LLMUpstreamURL)
+	uiMux.Handle("/mcp", uiSrv.WrapPublicMCP(publicMCP))
 	uiSrv.RegisterRegistryAPI(uiMux, mcpRegistry, &webui.TenantNames{Fn: authReg.Names})
 	uiSrv.Register(uiMux)
 	uiSrv.RegisterReceiptAPI(uiMux)
@@ -196,6 +213,7 @@ func serveCmd(args []string) {
 	if err := kgBridgeInst.Start(); err != nil {
 		log.Printf("[kg] semantica worker not started: %v", err)
 	} else {
+		replayKG(evStore, kgBuilder, kgBridgeInst)
 		uiSrv.RegisterKGAPI(uiMux, kgBridgeInst)
 		log.Printf("[kg] semantica worker on :8902")
 	}
@@ -213,6 +231,31 @@ func serveCmd(args []string) {
 	if err := ingress.Serve(ctx, cfg.Listen, gw, cfg.UpstreamCommand, authReg); err != nil {
 		log.Fatalf("ingress: %v", err)
 	}
+}
+
+func replayKG(st *store.Store, builder *kg.Builder, bridge *kgbridge.Bridge) {
+	if st == nil || builder == nil || bridge == nil {
+		return
+	}
+	events := st.Recent(10000)
+	var texts, ids []string
+	for _, ev := range events {
+		builder.Ingest(ev)
+		texts = append(texts, ev.Call.ToolID+" "+ev.Decision.Final.String()+" "+ev.Decision.Rationale)
+		ids = append(ids, ev.Call.CallID)
+	}
+	ents, rels := builder.Export()
+	if len(ents) > 0 || len(rels) > 0 {
+		if err := bridge.Ingest(ents, rels); err != nil {
+			log.Printf("[kg] replay graph failed: %v", err)
+		}
+	}
+	if len(texts) > 0 {
+		if err := bridge.IndexEvents(texts, ids); err != nil {
+			log.Printf("[kg] replay event index failed: %v", err)
+		}
+	}
+	log.Printf("[kg] replayed %d events into graph", len(events))
 }
 
 // multiSink fans audit events out to several sinks.

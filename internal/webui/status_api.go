@@ -24,17 +24,17 @@ func (s *Server) RegisterStatusAPI(mux *http.ServeMux, kg *kgbridge.Bridge, emit
 }
 
 func (s *Server) apiStatus(w http.ResponseWriter, _ *http.Request) {
-	kgOK := false
-	kgErr := ""
+	kgInfo := map[string]any{"available": false, "entities": 0, "indexed": 0, "graph_ready": false}
 	if statusSrc != nil && statusSrc.kg != nil {
-		// light probe via search with empty query (worker returns 400 if alive but query missing)
-		c := &http.Client{Timeout: 800 * time.Millisecond}
-		resp, err := c.Get(statusSrc.kg.URL() + "/health")
-		if err == nil {
-			kgOK = resp.StatusCode == 200
-			resp.Body.Close()
+		if health, err := statusSrc.kg.Health(); err == nil {
+			kgInfo["available"] = true
+			for _, key := range []string{"status", "entities", "indexed", "graph_ready"} {
+				if v, ok := health[key]; ok {
+					kgInfo[key] = v
+				}
+			}
 		} else {
-			kgErr = err.Error()
+			kgInfo["error"] = err.Error()
 		}
 	}
 	receiptCount := 0
@@ -45,7 +45,7 @@ func (s *Server) apiStatus(w http.ResponseWriter, _ *http.Request) {
 		receiptVerified = true
 	}
 	writeJSON(w, map[string]any{
-		"kg":       map[string]any{"available": kgOK, "error": kgErr},
+		"kg":       kgInfo,
 		"receipts": map[string]any{"count": receiptCount, "verified": receiptVerified},
 		"time":     time.Now().UTC().Format(time.RFC3339),
 	})

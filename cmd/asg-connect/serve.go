@@ -25,7 +25,8 @@ func serve(cfgPath string) error {
 	if err != nil {
 		return err
 	}
-	rep := newReporter(cfg.HubURL, cfg.TenantKey, cfg.EventSpoolPath, cfg.TenantName)
+	startAgentRegistration(*cfg)
+	rep := newReporter(cfg.HubURL, cfg.TenantKey, cfg.EventSpoolPath, cfg.TenantName, cfg.AgentID)
 	p := &llmProxy{cfg: cfg, rep: rep}
 
 	// Initialize semantic scanner (LLM-powered output analysis)
@@ -38,7 +39,7 @@ func serve(cfgPath string) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/", p.handleLLM)
 	mux.HandleFunc("/v1/messages", p.handleAnthropicBridge) // anthropic→openai bridge
-	mux.HandleFunc("/v1/responses", p.handleResponses) // OpenAI Responses API (Codex)
+	mux.HandleFunc("/v1/responses", p.handleResponses)      // OpenAI Responses API (Codex)
 	mux.HandleFunc("/responses", p.handleResponses)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte("ok"))
@@ -198,7 +199,9 @@ func (p *llmProxy) handleLLM(w http.ResponseWriter, r *http.Request) {
 			// Extract text content from OpenAI-format response
 			var cc struct {
 				Choices []struct {
-					Message struct { Content string `json:"content"` } `json:"message"`
+					Message struct {
+						Content string `json:"content"`
+					} `json:"message"`
 				} `json:"choices"`
 			}
 			if json.Unmarshal(respBody, &cc) == nil && len(cc.Choices) > 0 {
@@ -215,14 +218,16 @@ func (p *llmProxy) handleLLM(w http.ResponseWriter, r *http.Request) {
 					userTask := ""
 					for _, m := range reqObj.Messages {
 						if m.Role == "user" {
-							if s, ok := m.Content.(string); ok { userTask = s }
+							if s, ok := m.Content.(string); ok {
+								userTask = s
+							}
 							break
 						}
 					}
 					sr := outputsafety.ScanSemantic(outputText, userTask, "http://127.0.0.1:8902")
 					if sr.Suspicious {
 						log.Printf("[outputsafety] SEMANTIC %s: %s", sr.FinalVerdict, sr.Detail)
-						p.rep.ReportTool(sessionID, "semantic_scan", 
+						p.rep.ReportTool(sessionID, "semantic_scan",
 							[]byte(fmt.Sprintf(`{"verdict":"%s","detail":"%s"}`, sr.FinalVerdict, sr.Detail)),
 							sr.FinalVerdict, sr.Detail)
 					}
@@ -294,7 +299,6 @@ func (p *llmProxy) route(body []byte) (*Provider, string, error) {
 	}
 	return &Provider{Name: "none"}, model, fmt.Errorf("no providers configured")
 }
-
 
 func jsonQuote(s string) string {
 	b, _ := json.Marshal(s)

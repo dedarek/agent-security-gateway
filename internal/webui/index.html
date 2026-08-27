@@ -99,6 +99,17 @@ button{font-family:inherit}
 .toast.on{display:block}
 .toast.ok{border-color:var(--ok-line)}
 .toast.bad{border-color:var(--bad-line);color:var(--bad)}
+.agent-drawer-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:80;display:none}
+.agent-drawer-backdrop.on{display:block}
+.agent-drawer{position:fixed;z-index:81;right:0;top:0;bottom:0;width:min(480px,94vw);background:var(--panel);border-left:1px solid var(--line2);box-shadow:-18px 0 50px rgba(0,0,0,.35);transform:translateX(100%);transition:transform .22s ease;overflow:auto;padding:22px}
+.agent-drawer.on{transform:translateX(0)}
+.drawer-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:18px}
+.drawer-title{font-family:var(--font-disp);font-size:19px;font-weight:700}
+.agent-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+.agent-field{padding:9px 10px;border:1px solid var(--border);border-radius:7px;background:rgba(255,255,255,.02)}
+.agent-field label{display:block;color:var(--dim);font-size:10px;margin-bottom:4px}
+.agent-field b{font-size:12px;word-break:break-word}
+
 .kbd{font-family:var(--font-mono);font-size:10px;padding:2px 6px;border-radius:4px;background:var(--bg2);border:1px solid var(--line);color:var(--dim)}
 .axis-tag{display:inline-flex;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;border:1px solid;background:var(--bg2)}
 .ax-permission{color:#7ab5ff;border-color:rgba(122,181,255,.25)}
@@ -232,11 +243,40 @@ select.inp{appearance:none;padding-right:28px;background-image:url("data:image/s
 .login-title{font-family:var(--font-disp);font-size:18px;font-weight:700;margin-bottom:6px}
 .login-sub{font-size:12px;color:var(--dim);margin-bottom:18px}
 
+.agent-panel{margin-top:0}
+#agents-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.agent-card{background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:12px;cursor:pointer;transition:border-color .15s,transform .15s}
+.agent-card:hover{border-color:var(--accent-line);transform:translateY(-1px)}
+.agent-card-top{display:flex;align-items:center;gap:8px;margin-bottom:9px}
+.agent-card-name{font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.agent-type{font-family:var(--font-mono);font-size:9px;color:var(--dim);border:1px solid var(--line);border-radius:4px;padding:2px 5px}
+.agent-status{font-size:10px;white-space:nowrap}
+.agent-meta{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px;font-size:10px;color:var(--dim)}
+.agent-meta b{display:block;color:var(--fg2);font-size:11px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agent-ips{grid-column:1/-1;display:flex;gap:4px;flex-wrap:wrap}
+.agent-ips span{font-family:var(--font-mono);font-size:10px;background:rgba(74,155,212,.08);color:#9cc8f5;border-radius:4px;padding:2px 5px}
+.agent-bar{height:3px;border-radius:3px;background:var(--line);margin-top:10px;overflow:hidden}
+.agent-bar i{display:block;height:100%;background:var(--ok);border-radius:3px}
+.agent-actions{display:flex;gap:6px;align-items:center;margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
+.agent-actions .btn{font-size:10px}
+.detail-section{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+.detail-section h4{margin:0 0 8px;font-size:11px;color:var(--dim);letter-spacing:.04em}
+.detail-timeline{max-height:260px;overflow:auto}
+.detail-event{padding:8px 0;border-bottom:1px solid var(--line);font-size:11px}
+.detail-event:last-child{border-bottom:0}
+.detail-event-head{display:flex;gap:7px;align-items:center}.detail-event-head b{font-family:var(--font-mono);flex:1}
+.kg-state{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;background:var(--bg2);border:1px solid var(--line);font-size:11px}
+.kg-state strong{font-family:var(--font-mono);font-size:14px}
+.kg-state small{color:var(--dim)}
+.graph-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:240px;color:var(--dim);gap:8px;text-align:center}
+.graph-empty strong{color:var(--fg2);font-size:13px}
 @media(max-width:1000px){
   .app{grid-template-columns:200px 1fr}
   .stats-row{grid-template-columns:repeat(2,1fr)}
   .grid-2,.grid-3,.sess-layout{grid-template-columns:1fr}
+  #agents-list{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
+@media(max-width:680px){#agents-list{grid-template-columns:1fr}.agent-drawer{padding:16px}.agent-fields{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -338,12 +378,12 @@ select.inp{appearance:none;padding-right:28px;background-image:url("data:image/s
           <div class="panel-h"><h3>三轴信号</h3><span class="h-right">按轴聚合</span></div>
           <div class="panel-b"><div class="axis-list" id="axis-list"><div class="empty"><span class="empty-icon">◌</span>暂无信号</div></div></div>
         </div>
-      <div class="panel" style="margin-top:14px">
-        <div class="panel-h"><h3>已接入 Agent</h3><span class="h-right">实时连接状态</span></div>
-        <div class="panel-b"><div id="agents-list"><div class="empty"><span class="empty-icon">◌</span>暂无 agent 接入</div></div></div>
-      </div>
       </div>
       <div class="section-gap"></div>
+      <div class="panel agent-panel">
+        <div class="panel-h"><h3>已接入 Agent</h3><span class="h-right" id="agents-summary">实时连接状态</span></div>
+        <div class="panel-b"><div id="agents-list"><div class="empty"><span class="empty-icon">◌</span>暂无 agent 接入</div></div></div>
+      </div>
       <div class="grid-2">
         <div class="panel">
           <div class="panel-h"><h3>最新事件</h3><span class="h-right" id="feed-time"></span></div>
@@ -526,6 +566,11 @@ select.inp{appearance:none;padding-right:28px;background-image:url("data:image/s
 </div>
 
 <div class="toast" id="toast"></div>
+<div class="agent-drawer-backdrop" id="agent-drawer-backdrop" onclick="closeAgentDrawer()"></div>
+<aside class="agent-drawer" id="agent-drawer" aria-label="Agent 详情">
+  <div class="drawer-head"><div><div class="drawer-title" id="agent-drawer-title">Agent 详情</div><div class="dim" id="agent-drawer-sub"></div></div><button class="btn btn-ghost btn-xs" onclick="closeAgentDrawer()">关闭</button></div>
+  <div id="agent-drawer-body"></div>
+</aside>
 
 <script>
 'use strict';
@@ -574,25 +619,52 @@ function showLogin(){
 
 // ── nav ──
 async function loadAgents(){
-  const bx=document.getElementById('agents-list');if(!bx)return;
-  try{
-    const agents=await j('/api/agents');
-    if(!agents)return;
-    if(!agents.length){bx.innerHTML='<div class="empty"><span class="empty-icon">◌</span>暂无 agent 接入</div>';return}
-    bx.innerHTML='';
-    agents.forEach(a=>{
-      const d=document.createElement('div');
-      d.style.cssText='display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid var(--border)';
-      d.innerHTML=`<div><b style="font-size:13px">${esc(a.agent_id||a.session_id)}</b>
-        <span style="color:var(--dim);margin-left:8px;font-size:11px">${esc(a.user_id||'')}</span></div>
-        <div style="text-align:right"><span class="badge badge-${esc(a.last_verdict)}">${esc(a.last_verdict)}</span>
-        <span style="color:var(--dim);margin-left:6px;font-size:11px">${a.event_count} events</span></div>`;
-      bx.appendChild(d);
-    });
-  }catch(e){
-    bx.innerHTML=`<div class="empty" style="color:var(--bad)">Agent 列表加载失败：${esc(e.message||String(e))}</div>`;
-  }
+  const bx=$('agents-list');if(!bx)return;
+  const agents=await j('/api/agents'); if(!agents)return;
+  if(!agents.length){bx.innerHTML='<div class="empty"><span class="empty-icon">◌</span>暂无 Agent 接入</div>';return;}
+  const online=agents.filter(a=>a.status==='online').length;
+  const sum=$('agents-summary');if(sum)sum.textContent=`${online} 在线 · ${agents.length} 个 Agent`;
+  bx.innerHTML=agents.map(a=>{
+    const status=a.status||'event-only', color=status==='online'?'var(--ok)':status==='offline'?'var(--dim)':'var(--warn)';
+    const latestIP=a.ip||'';
+    const pct=Math.min(100,Math.max(8,(a.event_count||0)*12));
+    return `<div class="agent-card" onclick='openAgentDrawer(${JSON.stringify(a).replace(/'/g,'&#39;')})'>
+      <div class="agent-card-top"><span class="agent-status" style="color:${color}">●</span><span class="agent-card-name">${esc(a.alias||a.agent_id||a.session_id)}</span><span class="agent-type">${esc(a.agent_type||'未知类型')}</span></div>
+      <div class="agent-meta"><div>设备<b>${esc(a.machine_name||'未采集')}</b></div><div>模型<b>${esc(a.model||'未绑定')}</b></div>
+        <div>状态<b style="color:${color}">${esc(status)} · ${esc(a.isolation||'active')}</b></div><div>活动<b>${a.event_count||0} 次 · ${a.session_count||1} 会话</b></div>
+        <div class="agent-ips"><span>${latestIP?esc(latestIP):'未采集 IP'}</span></div></div>
+      <div class="agent-bar"><i style="width:${pct}%;background:${color}"></i></div></div>`;
+  }).join('');
 }
+async function openAgentDrawer(a){
+  $('agent-drawer-title').textContent=a.alias||a.agent_id||a.session_id||'Agent 详情';
+  $('agent-drawer-sub').textContent=(a.agent_type||'未知类型')+' · '+(a.status||'event-only');
+  $('agent-drawer-body').innerHTML='<div class="empty">正在加载详情…</div>';
+  $('agent-drawer-backdrop').classList.add('on'); $('agent-drawer').classList.add('on');
+  const d=await j('/api/agents/detail?agent_id='+encodeURIComponent(a.agent_id||a.session_id));
+  if(!d)return;
+  const x=d.agent||a, field=(label,value)=>`<div class="agent-field"><label>${esc(label)}</label><b>${esc(value??'未采集')}</b></div>`;
+  const levels=['active','paused','restricted','isolated'];
+  const timeline=(d.timeline||[]).map(e=>`<div class="detail-event"><div class="detail-event-head"><span class="bdg ${vdCls(e.verdict)}">${esc(e.verdict||'ALLOW')}</span><b>${esc(e.tool||'—')}</b><span class="dim mono">${fmtTs(e.timestamp)}</span></div><div class="dim" style="margin-top:4px">${esc(e.rationale||'')}</div>${e.request?`<div class="ev-pre">请求：${esc(e.request)}</div>`:''}${e.response?`<div class="ev-pre">响应：${esc(e.response)}</div>`:''}</div>`).join('')||'<div class="dim">暂无操作轨迹</div>';
+  const sessions=(d.sessions||[]).map(s=>`<span class="kbd">${esc(s.session_id||'')} · ${s.event_count||0} 次</span>`).join(' ')||'<span class="dim">暂无会话</span>';
+  const changes=(x.changes||[]).slice().reverse().slice(0,8).map(c=>`<div class="detail-event"><b>${esc(c.field||'变更')}</b><span class="dim"> ${esc(c.from||'—')} → ${esc(c.to||'—')} · ${fmtTs(c.at)}</span></div>`).join('')||'<div class="dim">暂无变更</div>';
+  $('agent-drawer-body').innerHTML=`<div class="panel" style="margin:0"><div class="panel-h"><h3>身份总卡</h3><span class="bdg ${x.status==='online'?'b-ALLOW':'b-CONFIRM'}">${esc(x.status||'event-only')}</span></div><div class="panel-b"><div class="agent-fields">
+    ${field('Agent ID',x.agent_id)}${field('探针 ID',x.probe_id)}${field('设备名',x.machine_name)}${field('机器码',x.machine_id)}
+    ${field('IP 地址',x.ip)}${field('连接 IP',x.connection_ip)}${field('进程 ID',x.process_id)}${field('Agent 类型',x.agent_type)}
+    ${field('当前模型',x.model)}${field('Provider',x.provider)}${field('OS / 用户',(x.os||'')+' / '+(x.user||''))}${field('最近判定',x.last_verdict)}
+    ${field('注册时间',x.registered_at)}${field('最后心跳',x.last_heartbeat)}${field('重启次数',x.restart_count)}${field('会话 / 操作数',(x.session_count||0)+' / '+(x.event_count||0))}
+  </div></div></div>
+  <div class="detail-section"><h4>暂停 / 隔离级别</h4><div class="agent-actions">${levels.map(l=>`<button class="btn ${x.isolation===l?'btn-accent':'btn-ghost'} btn-xs" onclick="changeAgentLevel('${esc(x.agent_id)}','${l}')">${l==='active'?'恢复':l==='paused'?'暂停':l==='restricted'?'受限':'完全隔离'}</button>`).join('')}</div></div>
+  <div class="detail-section"><h4>会话（${(d.sessions||[]).length}）</h4><div style="display:flex;gap:6px;flex-wrap:wrap">${sessions}</div></div>
+  <div class="detail-section"><h4>操作时间线（${(d.timeline||[]).length}）</h4><div class="detail-timeline">${timeline}</div></div>
+  <div class="detail-section"><h4>状态变更记录</h4>${changes}</div>`;
+}
+async function changeAgentLevel(agentID,level){
+  const r=await j('/api/agents/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent_id:agentID,level:level})});
+  if(r){toast('Agent 状态已更新：'+level,'ok');loadAgents();openAgentDrawer(r.agent||{agent_id:agentID});}
+}
+function closeAgentDrawer(){ $('agent-drawer').classList.remove('on'); $('agent-drawer-backdrop').classList.remove('on'); }
+
 const TITLES={overview:['总览','实时安全态势'],events:['事件','全部决策记录'],sessions:['会话','轨迹回放与根因'],intel:['情报','建议 · 聚类 · 策略'],approvals:['审批','人工确认队列'],graph:['图谱','Semantica 链路追溯'],admin:['管理','注册表 · 回执 · 系统']};
 let curView='overview';
 document.querySelectorAll('.nav-item').forEach(el=>{
@@ -931,22 +1003,23 @@ async function verifyChain(){
 async function loadStatus(){
   const s=await j('/api/status'); if(!s) return;
   $('status-time').textContent=fmtTs(s.time);
-  const kg=s.kg||{},rc=s.receipts||{};
+  const kg=s.kg||{},rc=s.receipts||{}, kgDesc=kg.available?`${kg.entities||0} 实体 · ${kg.indexed||0} 索引 · ${kg.graph_ready?'图谱 ready':'图谱未就绪'}`:(kg.error||'worker 未启动');
   $('status-list').innerHTML=[
-    {n:'KG Worker',ok:kg.available,desc:kg.available?'语义检索与图谱问答可用':('未启动 — 配置 kg_semantica_path 后重启')},
+    {n:'KG Worker',ok:!!(kg.available&&kg.graph_ready),desc:kgDesc},
     {n:'Explorer 反代',ok:true,desc:'/explorer/ → Semantica Explorer'},
     {n:'Receipt 链',ok:rc.verified,desc:(rc.count||0)+' 条回执 · 持久化'},
     {n:'探针上报',ok:true,desc:'POST /api/ingest（需 Bearer tenant key）'},
     {n:'MCP 入口',ok:true,desc:'POST /mcp · 127.0.0.1:8080'},
   ].map(x=>`<div class="status-row"><div><div class="status-name">${x.n}</div><div class="status-desc">${x.desc}</div></div>
     <span class="bdg ${x.ok?'b-ALLOW':'b-BLOCK'}">${x.ok?'正常':'异常'}</span></div>`).join('');
-  const kb=$('kg-badge'); if(kb) kb.innerHTML=kg.available?'<span class="bdg b-ALLOW">KG 可用</span>':'<span class="bdg b-BLOCK">KG 未启动</span>';
+  const kb=$('kg-badge'); if(kb) kb.innerHTML=kg.available&&kg.graph_ready?`<span class="bdg b-ALLOW">KG ${kg.entities||0} 节点</span>`:`<span class="bdg b-BLOCK">KG ${esc(kg.error||'未就绪')}</span>`;
 }
 async function kgAsk(){
   const q=$('kg-q').value.trim(); if(!q) return;
   const box=$('kg-out'); box.innerHTML='<div class="empty" style="padding:16px">检索中…</div>';
   const r=await j('/api/kg/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})});
-  if(!r) box.innerHTML='<div class="empty" style="padding:16px">KG 不可用 — 配置 kg_semantica_path 后重启网关</div>';
+  if(!r) box.innerHTML='<div class="empty" style="padding:16px;color:var(--bad)">KG 请求失败，请检查管理页状态</div>';
+  else if(r.error) box.innerHTML=`<div class="empty" style="padding:16px;color:var(--bad)">${esc(r.error)}</div>`;
   else box.innerHTML=`<div style="padding:10px;background:var(--info-bg);border:1px solid var(--info-line);border-radius:8px;font-size:12px;line-height:1.6">${esc(r.answer||JSON.stringify(r))}</div>`;
 }
 
@@ -954,12 +1027,13 @@ async function kgAsk(){
 let gNodes=[],gEdges=[],gSim=null,gAnim=null,gSelected=null,gPath=[];
 async function loadGraph(){
   const [nd,ed]=await Promise.all([j('/api/kg/graph/nodes'),j('/api/kg/graph/edges')]);
-  if(!nd||!ed){ $('graph-stats').textContent='KG 不可用'; return; }
+  const box=$('graph-stats');
+  if(!nd||!ed||nd.error||ed.error){ if(box)box.textContent='KG 请求失败'; const cv=$('graph-canvas'); if(cv)cv.outerHTML='<div id="graph-canvas" class="graph-empty"><strong>图谱暂不可用</strong><span>请到管理页查看 KG Worker 的具体状态</span><button class="btn btn-ghost btn-xs" onclick="loadGraph()">重试</button></div>'; return; }
   gNodes=(nd.nodes||[]).map(n=>({id:n.id,type:n.type,content:n.content||n.id,props:n.properties||{},x:0,y:0,vx:0,vy:0}));
   gEdges=(ed.edges||[]);
   $('graph-stats').textContent=`${gNodes.length} 节点 · ${gEdges.length} 边`;
   $('nc-graph').textContent=gNodes.length||'';
-  if(gNodes.length) initSim();
+  if(gNodes.length){ const cv=$('graph-canvas'); if(cv&&cv.tagName!=='CANVAS') cv.outerHTML='<canvas id="graph-canvas" class="graph-canvas"></canvas>'; initSim(); } else { const cv=$('graph-canvas'); if(cv)cv.outerHTML='<div id="graph-canvas" class="graph-empty"><strong>图谱 worker 正常，但暂无节点</strong><span>产生一条工具调用后，节点会出现在这里</span></div>'; }
 }
 function initSim(){
   const cv=$('graph-canvas'); if(!cv) return;
@@ -1091,8 +1165,8 @@ async function tracePath(){
 }
 
 // ── boot ──
-Promise.all([loadOverview(),loadSessions(),loadAgents()]);
-setInterval(()=>{ if(curView==='overview') { loadOverview(); loadAgents(); } },4000);
+Promise.all([loadOverview(),loadSessions(),loadAgents(),loadStatus()]);
+setInterval(()=>{ if(curView==='overview') { loadOverview(); loadAgents(); loadStatus(); } },4000);
 setInterval(()=>{ if(curView==='sessions'&&selSession) loadTrajectory(); },5000);
 setInterval(()=>{ if(curView==='approvals') loadApprovals(); },4000);
 </script>

@@ -4,6 +4,10 @@
 
 listen: ":8080"
 
+# Internal model bridge used by the public config-only Agent facade.
+# Remote Agents never need to install this bridge; it stays on the Gateway host.
+llm_upstream_url: "http://127.0.0.1:8181"
+
 # Real upstream MCP server the gateway proxies to (argv, spawned over stdio).
 upstream_command: ["./bin/upstream-mcp"]
 
@@ -23,7 +27,7 @@ behavior_sidecar_url: "http://127.0.0.1:8901"
 behavior_fail_open: true
 
 # Semantica KG bridge (optional; leave worker_script empty to disable)
-kg_python_bin: "./.venv-kg312/bin/python"
+kg_python_bin: "python"
 kg_worker_script: "internal/kgbridge/asg_kg_worker.py"
-kg_semantica_path: "/Users/mac/Documents/Default Project/semantica"
+kg_semantica_path: "D:/proj/semantica"
 kg_port: 8902

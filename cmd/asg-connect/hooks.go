@@ -31,7 +31,7 @@ func hookCheck(args []string) error {
 	if err != nil {
 		return err
 	}
-	rep := newReporter(cfg.HubURL, cfg.TenantKey, cfg.EventSpoolPath, cfg.TenantName)
+	rep := newReporter(cfg.HubURL, cfg.TenantKey, cfg.EventSpoolPath, cfg.TenantName, cfg.AgentID)
 	sessionID := req.SessionID
 	if sessionID == "" {
 		sessionID = "hook-" + cfg.TenantName
@@ -105,7 +105,7 @@ func initClient(app string) error {
 		_ = os.MkdirAll(dir, 0o755)
 		settings := map[string]any{
 			"env": map[string]string{
-				"ANTHROPIC_BASE_URL": "http://" + cfg.Listen,
+				"ANTHROPIC_BASE_URL":   "http://" + cfg.Listen,
 				"ANTHROPIC_AUTH_TOKEN": firstKey(cfg),
 			},
 		}

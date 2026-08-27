@@ -4,5 +4,6 @@ semantica>=0.3
 networkx
 rdflib
 fastembed
+gensim
 litellm
 numpy

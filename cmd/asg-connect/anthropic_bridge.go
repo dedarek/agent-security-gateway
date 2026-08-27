@@ -21,13 +21,13 @@ func (p *llmProxy) handleAnthropicBridge(w http.ResponseWriter, r *http.Request)
 	}
 
 	var req struct {
-		Model       string          `json:"model"`
-		MaxTokens   int             `json:"max_tokens"`
-		System      json.RawMessage `json:"system,omitempty"`
-		Messages    []anthroMsg     `json:"messages"`
+		Model       string           `json:"model"`
+		MaxTokens   int              `json:"max_tokens"`
+		System      json.RawMessage  `json:"system,omitempty"`
+		Messages    []anthroMsg      `json:"messages"`
 		Tools       []map[string]any `json:"tools,omitempty"`
-		Stream      bool            `json:"stream"`
-		Temperature *float64        `json:"temperature,omitempty"`
+		Stream      bool             `json:"stream"`
+		Temperature *float64         `json:"temperature,omitempty"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		http.Error(w, "bad request: "+err.Error(), 400)
@@ -48,8 +48,12 @@ func (p *llmProxy) handleAnthropicBridge(w http.ResponseWriter, r *http.Request)
 		"model":    upstreamModel,
 		"messages": convertAnthroMessages(req.System, req.Messages),
 	}
-	if req.MaxTokens > 0 { chat["max_tokens"] = req.MaxTokens }
-	if req.Temperature != nil { chat["temperature"] = *req.Temperature }
+	if req.MaxTokens > 0 {
+		chat["max_tokens"] = req.MaxTokens
+	}
+	if req.Temperature != nil {
+		chat["temperature"] = *req.Temperature
+	}
 
 	// Convert tools: anthropic → openai function format
 	if len(req.Tools) > 0 {
@@ -59,7 +63,9 @@ func (p *llmProxy) handleAnthropicBridge(w http.ResponseWriter, r *http.Request)
 			desc, _ := t["description"].(string)
 			schema := t["input_schema"]
 			fn := map[string]any{"name": name, "parameters": schema}
-			if desc != "" { fn["description"] = desc }
+			if desc != "" {
+				fn["description"] = desc
+			}
 			openaiTools = append(openaiTools, map[string]any{"type": "function", "function": fn})
 		}
 		chat["tools"] = openaiTools
@@ -69,12 +75,15 @@ func (p *llmProxy) handleAnthropicBridge(w http.ResponseWriter, r *http.Request)
 
 	// Forward to upstream chat/completions
 	upURL := strings.TrimSuffix(prov.BaseURL, "/")
-	if !strings.HasSuffix(upURL, "/v1") { upURL += "/v1" }
+	if !strings.HasSuffix(upURL, "/v1") {
+		upURL += "/v1"
+	}
 	upURL += "/chat/completions"
 
 	httpReq, _ := http.NewRequestWithContext(r.Context(), "POST", upURL, strings.NewReader(string(cb)))
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+prov.APIKey)
+	httpReq.Header.Set("x-api-key", prov.APIKey)
 
 	start := time.Now()
 	client := &http.Client{Timeout: 5 * time.Minute}
@@ -87,8 +96,19 @@ func (p *llmProxy) handleAnthropicBridge(w http.ResponseWriter, r *http.Request)
 	respBody, _ := io.ReadAll(resp.Body)
 
 	sessionID := r.Header.Get("x-asg-session")
-	if sessionID == "" { sessionID = "probe-" + prov.Name }
+	if sessionID == "" {
+		sessionID = "probe-" + prov.Name
+	}
 	p.rep.ReportLLM(sessionID, upstreamModel, body, respBody, time.Since(start).Milliseconds())
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+		if w.Header().Get("Content-Type") == "" {
+			w.Header().Set("Content-Type", "application/json")
+		}
+		w.WriteHeader(resp.StatusCode)
+		_, _ = w.Write(respBody)
+		return
+	}
 
 	// Parse OpenAI response and convert back to Anthropic format
 	var ccResp struct {
@@ -133,7 +153,9 @@ func (p *llmProxy) handleAnthropicBridge(w http.ResponseWriter, r *http.Request)
 	anthroContent = append(anthroContent, toolUse...)
 
 	stopReason := "end_turn"
-	if len(toolUse) > 0 { stopReason = "tool_use" }
+	if len(toolUse) > 0 {
+		stopReason = "tool_use"
+	}
 
 	// If the client requested streaming, synthesize Anthropic SSE events.
 	if req.Stream {
@@ -178,7 +200,9 @@ func convertAnthroMessages(system json.RawMessage, messages []anthroMsg) []map[s
 		}
 		if json.Unmarshal(system, &sysBlocks) == nil && len(sysBlocks) > 0 {
 			text := ""
-			for _, b := range sysBlocks { text += b.Text + "\n" }
+			for _, b := range sysBlocks {
+				text += b.Text + "\n"
+			}
 			out = append(out, map[string]any{"role": "system", "content": strings.TrimSpace(text)})
 		} else {
 			var s string
@@ -235,7 +259,9 @@ func convertAnthroMessages(system json.RawMessage, messages []anthroMsg) []map[s
 			out = append(out, map[string]any{"role": "user", "content": contentText})
 		} else if role == "assistant" {
 			entry := map[string]any{"role": "assistant", "content": contentText}
-			if len(toolCalls) > 0 { entry["tool_calls"] = toolCalls }
+			if len(toolCalls) > 0 {
+				entry["tool_calls"] = toolCalls
+			}
 			out = append(out, entry)
 		}
 	}

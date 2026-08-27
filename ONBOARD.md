@@ -96,6 +96,13 @@ curl -s http://127.0.0.1:8181/healthz
 - Claude Code: 设置环境变量 `ANTHROPIC_BASE_URL=http://127.0.0.1:8181`
 - Codex: config.toml 中 base_url 改为 `http://127.0.0.1:8181/v1`
 
+**Agent 身份约定（重要）：**
+- `X-ASG-Agent-ID` 是稳定的运行时 ID，按 Agent 类型/安装实例生成；不要使用会话 ID、请求 ID 或模型名。
+- `X-ASG-Session` 是会话 ID，同一个 Agent 可以有多个会话。
+- `X-ASG-Agent-Type` 填运行时类型，例如 `opencode`、`claude-code`；模型切换不会产生新 Agent。
+- `X-ASG-Agent-Alias` 可填展示名称，例如 `本机 OpenCode`。
+- 未提供稳定 Agent ID 时，网关只按“连接 IP + Agent 类型”合并，这是兼容兜底；正式接入应始终提供稳定 ID。
+
 重启 agent 使配置生效。
 
 ### 步骤 4 — 端到端验证

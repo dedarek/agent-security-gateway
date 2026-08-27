@@ -26,9 +26,13 @@ type ProbeConfig struct {
 	Providers []Provider `yaml:"providers"`
 
 	// Central gateway coordinates.
-	HubURL     string `yaml:"hub_url"`      // e.g. http://gw.corp:8080
-	TenantKey  string `yaml:"tenant_key"`   // this machine's identity
-	TenantName string `yaml:"tenant_name"`
+	HubURL      string   `yaml:"hub_url"`    // e.g. http://gw.corp:8080
+	TenantKey   string   `yaml:"tenant_key"` // this machine's identity
+	TenantName  string   `yaml:"tenant_name"`
+	AgentID     string   `yaml:"agent_id"`
+	AgentType   string   `yaml:"agent_type"`
+	AgentAlias  string   `yaml:"agent_alias"`
+	DeclaredIPs []string `yaml:"declared_ips,omitempty"`
 
 	// MCP shim: real upstream MCP servers, re-published locally.
 	MCPUpstreams []MCPUpstream `yaml:"mcp_upstreams"`
@@ -45,7 +49,7 @@ type ProbeConfig struct {
 }
 
 type Provider struct {
-	Name    string `yaml:"name"`    // logical name, e.g. "opencode-zen"
+	Name    string `yaml:"name"`     // logical name, e.g. "opencode-zen"
 	BaseURL string `yaml:"base_url"` // real provider endpoint
 	APIKey  string `yaml:"api_key"`
 	// DefaultModel is used when the agent sends a model name the probe maps
@@ -59,7 +63,7 @@ type Provider struct {
 }
 
 type MCPUpstream struct {
-	Name    string   `yaml:"name"`   // published tool namespace
+	Name    string   `yaml:"name"`    // published tool namespace
 	Command []string `yaml:"command"` // argv to spawn the real server
 }
 

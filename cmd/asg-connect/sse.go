@@ -42,7 +42,7 @@ func anthropicSSE(w http.ResponseWriter, model, content string, toolUses []map[s
 	// content_block_start (text)
 	if content != "" {
 		send("content_block_start", map[string]any{
-			"index": 0,
+			"index":         0,
 			"content_block": map[string]any{"type": "text", "text": ""},
 		})
 		seq++
@@ -51,7 +51,9 @@ func anthropicSSE(w http.ResponseWriter, model, content string, toolUses []map[s
 		runes := []rune(content)
 		for i := 0; i < len(runes); i += chunkSize {
 			end := i + chunkSize
-			if end > len(runes) { end = len(runes) }
+			if end > len(runes) {
+				end = len(runes)
+			}
 			send("content_block_delta", map[string]any{
 				"index": 0,
 				"delta": map[string]any{"type": "text_delta", "text": string(runes[i:end])},
@@ -69,7 +71,7 @@ func anthropicSSE(w http.ResponseWriter, model, content string, toolUses []map[s
 		input := tu["input"]
 		inputJSON, _ := json.Marshal(input)
 		send("content_block_start", map[string]any{
-			"index": idx,
+			"index":         idx,
 			"content_block": map[string]any{"type": "tool_use", "id": name, "name": name, "input": map[string]any{}},
 		})
 		seq++
@@ -83,7 +85,9 @@ func anthropicSSE(w http.ResponseWriter, model, content string, toolUses []map[s
 	}
 
 	stopReason := "end_turn"
-	if len(toolUses) > 0 { stopReason = "tool_use" }
+	if len(toolUses) > 0 {
+		stopReason = "tool_use"
+	}
 
 	// message_delta + message_stop
 	send("message_delta", map[string]any{
@@ -93,5 +97,3 @@ func anthropicSSE(w http.ResponseWriter, model, content string, toolUses []map[s
 
 	send("message_stop", map[string]any{})
 }
-
-

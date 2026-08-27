@@ -55,7 +55,7 @@ func TestTaintShortTokenNoFalsePositive(t *testing.T) {
 	}
 }
 
-func TestDLPRedactionCarriesConcreteMatches(t *testing.T) {
+func TestDLPCriticalSecretBlocksWithConcreteMatches(t *testing.T) {
 	eng, err := NewDataNetworkEngineFromFile("../../deploy/rules/pipelock-community.yaml", false)
 	if err != nil {
 		t.Fatalf("bundle load+verify failed: %v", err)
@@ -64,8 +64,8 @@ func TestDLPRedactionCarriesConcreteMatches(t *testing.T) {
 		CallID: "c4",
 		Output: []byte(`token=ops_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345 # 1Password service account`),
 	})
-	if sig.Verdict != api.VerdictRedact {
-		t.Fatalf("secret in result must REDACT, got %v", sig.Verdict)
+	if sig.Verdict != api.VerdictBlock {
+		t.Fatalf("critical secret must BLOCK, got %v", sig.Verdict)
 	}
 	if len(sig.Redactions) == 0 || sig.Redactions[0].Match == "" {
 		t.Fatalf("redactions must carry concrete Match values, got %+v", sig.Redactions)

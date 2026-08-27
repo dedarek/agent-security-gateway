@@ -1,9 +1,11 @@
 package proxy
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/dedarek/agent-security-gateway/api"
+	"github.com/dedarek/agent-security-gateway/internal/agentregistry"
 )
 
 func TestApplyRedactionsRewritesBytes(t *testing.T) {
@@ -44,5 +46,33 @@ func TestCollectRedactionsMergesSignals(t *testing.T) {
 	got := collectRedactions(signals)
 	if len(got) != 3 {
 		t.Fatalf("want 3 redactions merged, got %d", len(got))
+	}
+}
+
+func TestIsolationDecisionBlocksAndRestricts(t *testing.T) {
+	r, err := agentregistry.Open(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Upsert(agentregistry.Record{AgentID: "agent-1", SessionID: "session-1"}); err != nil {
+		t.Fatal(err)
+	}
+	g := &Gateway{Agents: r}
+	call := &api.ToolCall{Principal: api.Principal{AgentID: "agent-1"}, ToolID: "x", Action: "write"}
+	for _, level := range []string{"paused", "isolated", "restricted"} {
+		if _, err := r.SetIsolation("agent-1", level, "test"); err != nil {
+			t.Fatal(err)
+		}
+		if d := g.isolationDecision(call); d == nil || d.Final != api.VerdictBlock {
+			t.Fatalf("level %s must block write", level)
+		}
+	}
+	if _, err := r.SetIsolation("agent-1", "restricted", "test"); err != nil {
+		t.Fatal(err)
+	}
+	read := *call
+	read.Action = "read"
+	if d := g.isolationDecision(&read); d != nil {
+		t.Fatal("restricted read should pass through")
 	}
 }

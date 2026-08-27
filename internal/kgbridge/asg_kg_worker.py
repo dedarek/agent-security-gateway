@@ -34,6 +34,7 @@ INDEX_IDS = []
 
 # Semantica graph session — the real lineage graph
 GRAPH_SESSION = None
+WORKER_TOKEN = ""
 
 
 def _init_semantica(semantica_path):
@@ -224,7 +225,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.startswith("/health"):
-            self._json(200, {"status": "ok", "entities": len(KG_ENTITIES),
+            self._json(200, {"status": "ok", "pid": os.getpid(),
+                             "worker_token": WORKER_TOKEN,
+                             "worker_version": "asg-kg-1",
+                             "entities": len(KG_ENTITIES),
                              "indexed": len(INDEX_TEXTS),
                              "graph_ready": GRAPH_SESSION is not None})
         elif self.path == "/graph/nodes":
@@ -271,8 +275,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8902)
     ap.add_argument("--semantica-path", default="")
+    ap.add_argument("--worker-token", default="")
     args = ap.parse_args()
 
+    global WORKER_TOKEN
+    WORKER_TOKEN = args.worker_token
     _init_semantica(args.semantica_path)
     HTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
 

@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"sync"
+	"time"
 )
 
 // Bridge manages the Semantica worker process and its HTTP endpoints.
@@ -34,13 +36,42 @@ func (b *Bridge) Start() error {
 	if b.cmd != nil {
 		return nil // already running
 	}
+	startupToken := fmt.Sprintf("asg-%d", time.Now().UnixNano())
 	cmd := exec.Command(b.pythonBin, b.workerScript,
-		"--port", fmt.Sprint(b.port), "--semantica-path", b.semanticaPath)
+		"--port", fmt.Sprint(b.port), "--semantica-path", b.semanticaPath,
+		"--worker-token", startupToken)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start semantica worker: %w", err)
 	}
 	b.cmd = cmd
-	return nil
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	deadline := time.Now().Add(45 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-done:
+			b.cmd = nil
+			return fmt.Errorf("semantica worker exited before ready: %w", err)
+		default:
+		}
+		if health, err := b.Health(); err == nil {
+			workerToken, tokenOK := health["worker_token"].(string)
+			ready, readyOK := health["graph_ready"].(bool)
+			if tokenOK && workerToken == startupToken && readyOK && ready {
+				return nil
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	_ = cmd.Process.Kill()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+	}
+	b.cmd = nil
+	return fmt.Errorf("semantica worker did not become ready at %s", b.URL())
 }
 
 // Ingest posts graph deltas (entities/relationships) to the worker.
@@ -68,6 +99,24 @@ func (b *Bridge) IndexEvents(texts, eventIDs []string) error {
 	}
 	defer resp.Body.Close()
 	return nil
+}
+
+// Health returns the worker's actual readiness and data counts.
+func (b *Bridge) Health() (map[string]any, error) {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(b.URL() + "/health")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("worker health status %d", resp.StatusCode)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // GraphNodes returns all nodes in the Semantica graph session.
@@ -153,7 +202,7 @@ func (b *Bridge) URL() string { return fmt.Sprintf("http://127.0.0.1:%d", b.port
 func urlQueryEscape(s string) string { return url.QueryEscape(s) }
 
 type SearchHit struct {
-	Text  string  `json:"text"`
-	Score float64 `json:"score"`
-	EventID string `json:"event_id,omitempty"`
+	Text    string  `json:"text"`
+	Score   float64 `json:"score"`
+	EventID string  `json:"event_id,omitempty"`
 }

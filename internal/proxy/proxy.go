@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dedarek/agent-security-gateway/api"
+	"github.com/dedarek/agent-security-gateway/internal/agentregistry"
 	"github.com/dedarek/agent-security-gateway/internal/audit"
 	"github.com/dedarek/agent-security-gateway/internal/engine"
 	"github.com/dedarek/agent-security-gateway/internal/judge"
@@ -53,12 +54,17 @@ type Gateway struct {
 	Judge      *judge.Judge
 	KGBuilder  *kg.Builder
 	KGBridge   *kgbridge.Bridge
+	Agents     *agentregistry.Registry
 }
 
 // Handle runs one tool call through Pre -> (approve) -> Runtime -> Post and
 // returns the most-severe decision across phases. Exactly one signed receipt is
 // emitted per call, carrying the effective verdict.
 func (g *Gateway) Handle(ctx context.Context, c *api.ToolCall) (*api.ToolResult, api.Decision, error) {
+	if isolation := g.isolationDecision(c); isolation != nil {
+		g.record(c, nil, *isolation)
+		return nil, *isolation, nil
+	}
 	// ---- PRE ----
 	pre := g.Registry.EvaluatePre(ctx, c)
 	if pre.Final == api.VerdictBlock {
@@ -124,6 +130,30 @@ func (g *Gateway) Handle(ctx context.Context, c *api.ToolCall) (*api.ToolResult,
 	}
 	g.record(c, res, eff)
 	return res, eff, nil
+}
+
+func (g *Gateway) isolationDecision(c *api.ToolCall) *api.Decision {
+	if g.Agents == nil || c == nil {
+		return nil
+	}
+	id := c.Principal.AgentID
+	if id == "" {
+		id = c.Principal.SessionID
+	}
+	rec, ok := g.Agents.Get(id)
+	if !ok || rec.Isolation == "" || rec.Isolation == "active" {
+		return nil
+	}
+	blocked := rec.Isolation != "restricted" || strings.EqualFold(c.Action, "") || !strings.EqualFold(c.Action, "read")
+	if !blocked {
+		return nil
+	}
+	reason := "agent is " + rec.Isolation + "; tool call blocked"
+	return &api.Decision{
+		CallID: c.CallID, Phase: api.PhasePre, Final: api.VerdictBlock, Risk: 100,
+		Rationale: reason,
+		Signals:   []api.Signal{{Axis: api.AxisPermission, Engine: "agent_isolation", Score: 100, Verdict: api.VerdictBlock, Reasons: []string{reason}}},
+	}
 }
 
 // collectRedactions gathers the concrete scrub operations from all REDACT

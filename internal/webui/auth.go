@@ -132,7 +132,6 @@ func (s *Server) uiLogin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
-
 const loginPageHTML = `<!DOCTYPE html>
 <html lang="zh"><head><meta charset="utf-8"><title>ASG 登录</title>
 <style>

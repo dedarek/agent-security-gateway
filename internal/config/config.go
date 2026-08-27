@@ -12,6 +12,7 @@ import (
 // (Default) or loaded from a YAML file (Load).
 type Config struct {
 	Listen          string   `yaml:"listen"`
+	LLMUpstreamURL  string   `yaml:"llm_upstream_url"`
 	CedarPolicyPath string   `yaml:"cedar_policy_path"`
 	RulesPath       string   `yaml:"rules_path"`
 	UpstreamCommand []string `yaml:"upstream_command"`
@@ -53,6 +54,7 @@ type Config struct {
 func Default() Config {
 	return Config{
 		Listen:                   ":8080",
+		LLMUpstreamURL:           "http://127.0.0.1:8181",
 		CedarPolicyPath:          "./deploy/policies/permission.cedar",
 		RulesPath:                "./deploy/rules/pipelock-community.yaml",
 		UpstreamCommand:          []string{"./bin/upstream-mcp"},

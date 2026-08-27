@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/dedarek/agent-security-gateway/api"
+	"github.com/dedarek/agent-security-gateway/internal/agentregistry"
 	"github.com/dedarek/agent-security-gateway/internal/approval"
 	"github.com/dedarek/agent-security-gateway/internal/intel"
 	"github.com/dedarek/agent-security-gateway/internal/policyhub"
@@ -25,9 +26,14 @@ type Server struct {
 	Approvals  *approval.Manager
 	Hub        *policyhub.Hub
 	Auth       *uiAuth
+	Agents     *agentregistry.Registry
 	mu         sync.RWMutex
 	suggs      map[string]*intel.Suggestion
 	ingestAuth func(header string) bool // nil = open (dev)
+	// Agent onboarding/telemetry can run without a tenant key. This is
+	// deliberately separate from operator-console and central-MCP auth.
+	agentIngressOpen  bool
+	publicLLMUpstream string
 }
 
 func New(st *store.Store, am *approval.Manager, hub *policyhub.Hub) *Server {
@@ -35,11 +41,29 @@ func New(st *store.Store, am *approval.Manager, hub *policyhub.Hub) *Server {
 }
 
 // SetIngestAuth enforces tenant-key auth on POST /api/ingest.
+func (s *Server) SetAgentRegistry(r *agentregistry.Registry) { s.Agents = r }
+
 func (s *Server) SetIngestAuth(f func(header string) bool) { s.ingestAuth = f }
+
+// SetAgentIngressOpen enables no-key registration, heartbeat, and telemetry.
+// Public telemetry identity is treated as untrusted by normalizeIngressEvent.
+func (s *Server) SetAgentIngressOpen(open bool) { s.agentIngressOpen = open }
+
+func (s *Server) effectiveIngestAuth(auth func(string) bool) func(string) bool {
+	if s.agentIngressOpen {
+		return nil
+	}
+	return auth
+}
 
 func (s *Server) Register(mux *http.ServeMux) {
 	// ingest auth: open in dev (nil), tenant-key enforced when SetIngestAuth is called
-	s.RegisterIngestWithAuth(mux, s.ingestAuth)
+	s.RegisterIngestWithAuth(mux, s.effectiveIngestAuth(s.ingestAuth))
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
 	mux.HandleFunc("/", s.Auth.middleware(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -67,6 +91,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/siem", s.Auth.middleware(s.apiSIEM))
 	mux.HandleFunc("/api/query", s.Auth.middleware(s.apiQuery))
 	mux.HandleFunc("/api/agents", s.Auth.middleware(s.apiAgents))
+	mux.HandleFunc("/api/agents/detail", s.Auth.middleware(s.apiAgentDetail))
+	mux.HandleFunc("/api/agents/action", s.Auth.middleware(s.apiAgentAction))
+	mux.HandleFunc("/api/agents/register", s.apiAgentRegister)
+	mux.HandleFunc("/api/agents/heartbeat", s.apiAgentHeartbeat)
 	mux.HandleFunc("/api/ui-login", s.uiLogin)
 }
 

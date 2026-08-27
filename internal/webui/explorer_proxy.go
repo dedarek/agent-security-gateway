@@ -5,7 +5,6 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
-
 )
 
 // RegisterExplorerProxy mounts the Semantica Explorer (interactive graph UI +
@@ -54,4 +53,3 @@ func RegisterExplorerProxy(mux *http.ServeMux, target string, apiKey string) {
 		})
 	}
 }
-
