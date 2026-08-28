@@ -1,0 +1,91 @@
+#!/bin/sh
+# asg-disable — one-click removal of ASG hooks from harness settings
+# Keeps ~/.asg/* for re-enable (does not delete config/bypass.log).
+# POSIX sh + python3 for JSON manipulation.
+
+set -eu
+
+TARGETS=""
+# Claude Code stores hooks in ~/.claude/settings.json (user scope)
+# also check ./.claude and $HOME fallback
+for _f in "$HOME/.claude/settings.json" "$HOME/.claude.json"; do
+  if [ -f "$_f" ]; then TARGETS="$TARGETS $_f"; fi
+done
+
+if [ -z "$TARGETS" ]; then
+  echo "no settings.json found (nothing to disable)" >&2
+  exit 0
+fi
+
+for f in $TARGETS; do
+  [ -f "$f" ] || continue
+  _bak="$f.bak.$(date +%s 2>/dev/null || echo $$)"
+  cp "$f" "$_bak" 2>/dev/null || true
+  echo "backup: $_bak" >&2
+
+  _py=""
+  if command -v python3 >/dev/null 2>&1; then _py=python3
+  elif command -v python >/dev/null 2>&1; then _py=python
+  elif command -v py >/dev/null 2>&1; then _py=py
+  fi
+  # fallback to known venv locations on Windows (hermes venv)
+  if [ -z "$_py" ] || ! $_py --version >/dev/null 2>&1; then
+    for _cand in "$HOME/AppData/Local/hermes/hermes-agent/venv/Scripts/python.exe" "/c/Users/yyyyc/AppData/Local/hermes/hermes-agent/venv/Scripts/python.exe" "C:/Users/yyyyc/AppData/Local/hermes/hermes-agent/venv/Scripts/python.exe"; do
+      if [ -x "$_cand" ] 2>/dev/null && "$_cand" --version >/dev/null 2>&1; then _py="$_cand"; break; fi
+    done
+  fi
+  if [ -n "$_py" ]; then
+    # convert MSYS /tmp path to Windows native for Windows python
+    _f_win="$f"
+    if command -v cygpath >/dev/null 2>&1; then
+      _f_win=$(cygpath -w "$f" 2>/dev/null || echo "$f")
+    fi
+    $_py - "$_f_win" <<'PYEOF'
+import json, sys, pathlib
+p = sys.argv[1]
+try:
+    raw = pathlib.Path(p).read_text(encoding="utf-8").strip() or "{}"
+    d = json.loads(raw)
+except Exception as e:
+    print(f"warn: failed to parse {p}: {e}", file=sys.stderr)
+    sys.exit(0)
+h = d.get("hooks", {})
+changed = False
+for ev in list(h.keys()):
+    orig = h[ev]
+    # hooks is list of groups: each group has {"hooks": [{"command":...}]}
+    new_groups = []
+    for grp in orig:
+        hooks = grp.get("hooks", [])
+        filt = [x for x in hooks if not any(k in x.get("command","") for k in ("asg-guard","asg-report"))]
+        if filt:
+            grp["hooks"] = filt
+            new_groups.append(grp)
+        else:
+            changed = True
+    if len(new_groups) != len(orig):
+        changed = True
+    if new_groups:
+        h[ev] = new_groups
+    else:
+        if ev in h:
+            del h[ev]
+            changed = True
+if changed or True:
+    # write back even if no hooks left, to ensure cleanup
+    if not h and "hooks" in d:
+        # keep empty hooks object removal optional: keep structure
+        pass
+    pathlib.Path(p).write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"ASG hooks removed from {p}")
+else:
+    print(f"no ASG hooks in {p}")
+
+PYEOF
+  else
+    echo "python not found (tried python3/python/py), manual edit required for $f" >&2
+    echo "remove any hooks[].hooks[].command containing asg-guard or asg-report" >&2
+  fi
+done
+
+echo "ASG disabled. Backups: *.bak.* ; data kept in ~/.asg/ for re-enable" >&2

@@ -1,0 +1,158 @@
+#!/bin/sh
+# ASG PreToolUse guard — SYNCHRONOUS, must complete fast and print decision.
+# POSIX sh, no python required (python fallback for JSON escaping only).
+# HARD RULES:
+#   1. Fail-open for L1, fail-closed for L2 (ASG_UNREACHABLE deny).
+#   2. Bounded: TIMEOUT per risk level (L1 short, L2 long). Hook timeout = TIMEOUT+3.
+#   3. Only stdout is the decision JSON. Diagnostics go to stderr.
+#   4. Only BLOCK is enforced. CONFIRM/ALLOW fall through.
+#   5. L0 bypasses network entirely. BYPASS=1 bypasses and leaves audit trail.
+
+# 0. load config (if missing -> fail-open)
+if [ ! -r "$HOME/.asg/config" ]; then
+  exit 0
+fi
+# shellcheck disable=SC1090
+. "$HOME/.asg/config"
+
+# 1. read hook payload from stdin
+PAYLOAD=$(cat 2>/dev/null)
+if [ -z "$PAYLOAD" ]; then
+  exit 0
+fi
+
+# helper: extract string value for given JSON key via sed (no python)
+# tries tool_name/tool/toolName/name in order
+_get() {
+  printf '%s' "$PAYLOAD" | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -n 1
+}
+
+TOOL_NAME=$(_get tool_name)
+if [ -z "$TOOL_NAME" ]; then TOOL_NAME=$(_get tool); fi
+if [ -z "$TOOL_NAME" ]; then TOOL_NAME=$(_get toolName); fi
+if [ -z "$TOOL_NAME" ]; then TOOL_NAME=$(_get name); fi
+
+# 2. bypass escape hatch — single-use, audited
+# log format: ISO8601 tool_name bypass
+if [ "$ASG_BYPASS" = "1" ]; then
+  _bypass_ts=$(date -u +%FT%TZ 2>/dev/null)
+  if [ -z "$_bypass_ts" ]; then _bypass_ts=$(date 2>/dev/null); fi
+  mkdir -p "$HOME/.asg" 2>/dev/null
+  printf '%s\t%s\t%s\n' "$_bypass_ts" "${TOOL_NAME:-unknown}" "bypass" >> "$HOME/.asg/bypass.log" 2>/dev/null
+  echo "[asg-guard] BYPASS=1 for $TOOL_NAME, logged to bypass.log" >&2
+  exit 0
+fi
+
+# 3. classify risk level (load classifier from multiple locations)
+_asg_classify_loaded=0
+if [ -r "$HOME/.asg/asg-classify" ]; then
+  # shellcheck disable=SC1090
+  . "$HOME/.asg/asg-classify" 2>/dev/null && _asg_classify_loaded=1
+elif [ -r "$(dirname "$0")/asg-classify" ]; then
+  # shellcheck disable=SC1090
+  . "$(dirname "$0")/asg-classify" 2>/dev/null && _asg_classify_loaded=1
+elif [ -r "./scripts/asg-classify" ]; then
+  . "./scripts/asg-classify" 2>/dev/null && _asg_classify_loaded=1
+fi
+
+if [ "$_asg_classify_loaded" = "1" ] && command -v asg_classify >/dev/null 2>&1; then
+  LEVEL=$(asg_classify "$TOOL_NAME" "$PAYLOAD" 2>/dev/null)
+else
+  LEVEL="L1"
+fi
+# extraction failure falls to L1 already
+
+# 4. L0 never blocks, never waits — observer hook handles it
+if [ "$LEVEL" = "L0" ]; then
+  echo "[asg-guard] L0 $TOOL_NAME -> pass (no network)" >&2
+  exit 0
+fi
+
+# 5. derive timeout and fail mode per level
+# support both new L1/L2 vars and legacy ASG_GUARD_TIMEOUT
+if [ "$LEVEL" = "L1" ]; then
+  TIMEOUT="${ASG_L1_TIMEOUT:-${ASG_GUARD_TIMEOUT:-2}}"
+  FAIL_MODE="open"
+else
+  # L2 (and any unknown -> treat as L2 for safety)
+  TIMEOUT="${ASG_L2_TIMEOUT:-${ASG_GUARD_TIMEOUT:-5}}"
+  FAIL_MODE="closed"
+fi
+
+# ensure TIMEOUT is numeric, fallback
+case "$TIMEOUT" in
+  ''|*[!0-9]*) TIMEOUT=2 ;;
+esac
+
+# helper: deny due to unreachable gateway (fail-closed)
+deny_unreachable() {
+  # stdout must be exactly the Claude Code deny JSON, nothing else
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"[ASG_UNREACHABLE] \u65e0\u6cd5\u8054\u7cfb\u5b89\u5168\u7f51\u5173\uff08%ss \u8d85\u65f6\uff09\uff0c\u9ad8\u5371\u64cd\u4f5c\u5df2\u6309\u5b89\u5168\u7b56\u7565\u62d2\u7edd\u3002\u4e34\u65f6\u653e\u884c\uff1aASG_BYPASS=1 \u91cd\u8bd5\uff1b\u5f7b\u5e95\u89e3\u9664\uff1ash ~/.asg/asg-disable"}}' "$TIMEOUT"
+}
+
+# 6. check required vars before network call
+if [ -z "$ASG_HUB" ]; then
+  echo "[asg-guard] no ASG_HUB, fail-open" >&2
+  exit 0
+fi
+
+# 7. call gateway — POST /api/activity with pre_tool_use event
+# hook_payload is the raw stdin JSON (already an object)
+# construct body: {"agent_id":"...","agent_type":"...","event":"pre_tool_use","hook_payload":<PAYLOAD>}
+# use printf to avoid injection; PAYLOAD already JSON, embed raw
+_BODY=$(printf '{"agent_id":"%s","agent_type":"%s","event":"pre_tool_use","hook_payload":%s}' \
+  "$ASG_AGENT_ID" "$ASG_HARNESS" "$PAYLOAD" 2>/dev/null)
+
+if [ -z "$_BODY" ]; then
+  echo "[asg-guard] empty body, fail-open" >&2
+  exit 0
+fi
+
+# curl with bounded timeout; hook timeout is TIMEOUT+3 so curl must finish first
+RESP=""
+CURL_EXIT=0
+RESP=$(printf '%s' "$_BODY" | curl -sS --max-time "$TIMEOUT" -X POST "$ASG_HUB/api/activity" \
+  -H 'Content-Type: application/json' \
+  -H "X-ASG-Agent-Id: $ASG_AGENT_ID" \
+  -H "X-ASG-Key: $ASG_TENANT_KEY" \
+  --data-binary @- 2>/dev/null) || CURL_EXIT=$?
+
+# 8. handle unreachable / empty response
+if [ "$CURL_EXIT" -ne 0 ] || [ -z "$RESP" ]; then
+  echo "[asg-guard] gateway unreachable (curl exit $CURL_EXIT), level $LEVEL fail=$FAIL_MODE" >&2
+  if [ "$FAIL_MODE" = "closed" ]; then
+    deny_unreachable
+    exit 0
+  else
+    exit 0
+  fi
+fi
+
+# 9. parse verdict — try sed extraction (no python required)
+_VERDICT=$(printf '%s' "$RESP" | sed -n 's/.*"verdict"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+# also handle lowercase/uppercase? gateway returns upper-case BLOCK
+# fallback: check for "status":"blocked"
+if [ -z "$_VERDICT" ]; then
+  case "$RESP" in
+    *'"status"'*'"blocked"'*|*'"status": "blocked"'*) _VERDICT="BLOCK" ;;
+  esac
+fi
+
+if [ "$_VERDICT" != "BLOCK" ]; then
+  echo "[asg-guard] verdict=$_VERDICT -> pass" >&2
+  exit 0
+fi
+
+# BLOCK -> extract code/message for reason
+_CODE=$(printf '%s' "$RESP" | sed -n 's/.*"code"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+_MSG=$(printf '%s' "$RESP" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+if [ -z "$_CODE" ]; then _CODE="SENSITIVE_OP_BLOCK"; fi
+if [ -z "$_MSG" ]; then _MSG="blocked by ASG policy"; fi
+
+# escape double quotes in message for JSON (basic)
+_ESC_MSG=$(printf '%s' "$_MSG" | sed 's/"/\\"/g' | tr -d '\n\r' | head -c 400)
+_ESC_CODE=$(printf '%s' "$_CODE" | sed 's/"/\\"/g' | head -c 100)
+
+# 10. emit Claude Code deny JSON to stdout
+printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"[ASG %s] %s"}}' "$_ESC_CODE" "$_ESC_MSG"
+exit 0

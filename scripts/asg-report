@@ -1,0 +1,43 @@
+#!/bin/sh
+# ASG activity reporter — POSIX sh, no binary, no daemon, no sudo.
+# Async observer hook: never blocks, always exits 0.
+# Includes bypass.log complement: if bypass was used, report it as bypass_used event.
+
+[ -r "$HOME/.asg/config" ] || exit 0
+# shellcheck disable=SC1090
+. "$HOME/.asg/config"
+
+PAYLOAD=$(cat 2>/dev/null)
+[ -n "$PAYLOAD" ] || PAYLOAD='{}'
+
+# complement: if bypass.log exists and non-empty, post bypass_used event then truncate
+if [ -s "$HOME/.asg/bypass.log" ]; then
+  (
+    _bypass_content=$(cat "$HOME/.asg/bypass.log" 2>/dev/null | head -c 2000 | tr '\n' ';' | sed 's/"/\\"/g')
+    printf '{"agent_id":"%s","agent_type":"%s","event":"bypass_used","detail":"tool","hook_payload":{"bypass_log":"%s"}}' \
+      "$ASG_AGENT_ID" "$ASG_HARNESS" "$_bypass_content" \
+    | curl -sS --max-time 2 -X POST "$ASG_HUB/api/activity" \
+        -H 'Content-Type: application/json' \
+        -H "X-ASG-Agent-Id: $ASG_AGENT_ID" \
+        -H "X-ASG-Key: $ASG_TENANT_KEY" \
+        --data-binary @- >/dev/null 2>&1 || true
+    # optional: keep log but mark reported, or truncate after successful post
+    # we append a marker so repeated calls don't spam; simplest: truncate after fire-and-forget
+    # keep last line? plan says POST then clear: do > bypass.log to avoid duplication
+    # but keep file for audit: move to bypass.log.reported
+    cat "$HOME/.asg/bypass.log" >> "$HOME/.asg/bypass.log.reported" 2>/dev/null || true
+    : > "$HOME/.asg/bypass.log" 2>/dev/null || true
+  ) >/dev/null 2>&1 &
+fi
+
+(
+  printf '{"agent_id":"%s","agent_type":"%s","event":"%s","detail":"%s","hook_payload":%s}' \
+    "$ASG_AGENT_ID" "$ASG_HARNESS" "${ASG_EVENT:-tool_use}" "$ASG_DETAIL" "$PAYLOAD" \
+  | curl -sS --max-time 2 -X POST "$ASG_HUB/api/activity" \
+      -H 'Content-Type: application/json' \
+      -H "X-ASG-Agent-Id: $ASG_AGENT_ID" \
+      -H "X-ASG-Key: $ASG_TENANT_KEY" \
+      --data-binary @- >/dev/null 2>&1 || true
+) >/dev/null 2>&1 &
+
+exit 0
