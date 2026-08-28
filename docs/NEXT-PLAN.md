@@ -219,7 +219,7 @@ export OTEL_METRIC_EXPORT_INTERVAL=60000
 | 项 | 选型 | 出处 |
 |---|---|---|
 | 框架 | **Vite + React + TypeScript** | 标准前端工程 |
-| UI 库 | **shadcn/ui + Tailwind** | `shadcn-ui/ui` |
+| UI 库 | **已移除 Tailwind —— 实际采用内联样式，2026-08-28 审计确认 className 使用为 0** | — |
 | 图表 | **Recharts** | `recharts/recharts` |
 | 图谱可视化 | **Cytoscape.js** 或 **react-force-graph** | 用于 semantic KG / 本体论展示（**核心卖点**） |
 | 实时推送 | **SSE**（`text/event-stream`，比 WebSocket 简单，单向足够） | 用户答复：要实时推送 |
