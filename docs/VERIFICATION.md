@@ -4,28 +4,29 @@ _Generated 2026-08-28 after sidecar dedupe. All commands below are verbatim from
 
 ## Task 10 — Dedupe evidence
 
-### Listeners (Get-NetTCPConnection -State Listen)
+### Listeners (Get-NetTCPConnection -State Listen) — final 2026-08-28 17:40
 ```
 PORT 8901 PID=63536 LISTENING
-PORT 8902 PID=12560 LISTENING
+PORT 8902 PID=44896 LISTENING   (restarted after shim-kill; previous PID 12560 also valid)
 PORT 8903 PID=18304 LISTENING
 PORT 8090 PID=24028 LISTENING
 ```
 
-### Python sidecar processes (post-cleanup, 2026-08-28 17:36)
+### Python sidecar processes (post-cleanup, single uv-python per port)
 ```
-PID=63536  .../python.exe D:/proj/agent-security-gateway/intelligence/analyzer/sidecar.py --policy D:/proj/agent-security-gateway/intelligence/analyzer/policy.iv --port 8901
-PID=12560  .../python.exe D:/proj/agent-security-gateway/internal/kgbridge/asg_kg_worker.py --port 8902 --semantica-path D:/proj/semantica --worker-token asg-1787764330257444600
+PID=63536  .../python.exe D:/proj/agent-security-gateway/intelligence/analyzer/sidecar.py --policy .../policy.iv --port 8901
+PID=44896  .../python.exe D:/proj/agent-security-gateway/internal/kgbridge/asg_kg_worker.py --port 8902 --semantica-path D:/proj/semantica --worker-token asg-1787764330257444600
 PID=18304  .../python.exe intelligence/outputguard/sidecar.py --port 8903
 ```
-Previous zombie parents (66524,38776,22768) were hermes-venv shim wrappers (uv shim staying resident + child uv python listening). Killing the shim also terminated the child, so all three sidecars were restarted as single uv-python processes (no shim duplication) with explicit PYTHONPATH.
+Previous zombie parents (66524,38776,22768) were hermes-venv shim wrappers (uv shim staying resident + child uv python listening). Killing the shim also terminated the child, so all three sidecars were restarted as single uv-python processes (no shim duplication) with explicit `PYTHONPATH=C:/Users/yyyyc/AppData/Local/hermes/hermes-agent/venv/Lib/site-packages` (and `;D:/proj/semantica` for KG).
 
-### Health (curl)
+### Health (curl — every port exactly 1 listener)
 ```
 GET http://127.0.0.1:8901/health -> 200 {"status":"ok"}
 GET http://127.0.0.1:8903/health -> 200 {"status":"ok","guard":false,"scanners":0}
-GET http://127.0.0.1:8902/health -> 200 {"status":"ok","pid":12560,...,"graph_ready":true}
+GET http://127.0.0.1:8902/health -> 200 {"status":"ok","pid":44896,"worker_token":"asg-1787764330257444600","graph_ready":true}
 GET http://127.0.0.1:8090/healthz -> 200 ok
+GET https://asg-gateway.vip.cpolar.cn/healthz -> 200 (cpolar 27308, subdomain asg-gateway, region cn_vip)
 ```
 
 ### Canonical start commands (for Task 12 nssm AppDirectory/AppParameters)
@@ -43,11 +44,83 @@ Notes:
 - KGWorker worker-token must NOT be hard-coded; use env var `ASG_KG_WORKER_TOKEN` (fallback shown is live token at time of capture).
 - OutputGuard and Behavior require `PYTHONPATH` to include hermes venv site-packages for `invariant` import (uv base python alone lacks it).
 
-## Task 11 — nssm install
-_To be filled after winget install._
+## Task 11 — nssm install ✅
 
-## Task 13 — kill recovery (<30s)
-_To be filled after nssm services Running + kill tests._
+- `winget install --id NSSM.NSSM --accept-source-agreements --accept-package-agreements` → **Successfully installed** `NSSM 2.24-101-g897c7ad`
+- Package path: `C:/Users/yyyyc/AppData/Local/Microsoft/WinGet/Packages/NSSM.NSSM_Microsoft.Winget.Source_8wekyb3d8bbwe/nssm-2.24-101-g897c7ad/win64/nssm.exe`
+- Copied to `D:/tools/bin/nssm.exe` (368640 bytes) and added to PATH (`D:/tools/bin` + `WinGet/Links`); `D:/tools/bin/nssm.exe version` → `NSSM 2.24-101-g897c7ad 64-bit 2017-04-26`
+- `where nssm` initially empty because winget Links not yet on PATH for current shell — resolved by copying to `D:/tools/bin`.
+
+Fallback ready: if winget had failed, `curl https://nssm.cc/release/nssm-2.24.zip → D:/tools/bin`; if nssm completely unavailable, `sc failure <name> reset=60 actions=restart/5000` (documented in `install-services.ps1` sc branch).
+
+## Task 12 — five-process service definitions ✅ (scripts updated, install needs admin)
+
+`scripts/install-services.ps1` now defines **5 services** (was 3, missing 8901/8903):
+
+| Service | Port | Application | AppDirectory | AppParameters |
+|---|---|---|---|---|
+| ASG-Gateway | 8090 | `D:/proj/agent-security-gateway/bin/gateway.exe` | `D:/proj/agent-security-gateway` | `serve -config deploy/config.dev.yaml` |
+| ASG-Cpolar | — | `D:/cpolar/cpolar.exe` | `D:/proj/agent-security-gateway` | `start asg-console --log=stdout` (subdomain `asg-gateway`, region `cn_vip`, from `~/.cpolar/cpolar.yml`) |
+| ASG-Behavior | 8901 | `.../uv/.../python.exe` | `D:/proj/agent-security-gateway/intelligence/analyzer` | `.../sidecar.py --policy .../policy.iv --port 8901` + `AppEnvironmentExtra PYTHONPATH=.../hermes/.../site-packages LOCAL_POLICY=1` |
+| ASG-KGWorker | 8902 | `.../uv/.../python.exe` | `D:/proj/agent-security-gateway` | `.../asg_kg_worker.py --port 8902 --semantica-path D:/proj/semantica --worker-token $env:ASG_KG_WORKER_TOKEN` + `PYTHONPATH=...;D:/proj/semantica` |
+| ASG-OutputGuard | 8903 | `.../uv/.../python.exe` | `D:/proj/agent-security-gateway` | `.../outputguard/sidecar.py --port 8903` + `PYTHONPATH=...` |
+
+Per-service nssm settings: `AppExit Default Restart`, `AppRestartDelay 5000`, `AppStdout/Stderr → logs/<name>.log`, `AppRotateFiles 1`, `AppRotateOnline 1`, `AppRotateBytes 10485760` (10 MB), `Start SERVICE_AUTO_START`, `DependOnService ""`.
+
+`scripts/uninstall-services.ps1` now removes 5 names + legacy `ASG-Connect` if present; handles both nssm and sc paths.
+
+Verification (syntax & params, no admin execution):
+```
+powershell -NoProfile -Command "[System.Management.Automation.Language.Parser]::ParseFile(...)"
+→ ParseFile OK
+Get-Service ASG-* → (none yet — install requires admin, see Task 13)
+```
+
+**Manual install (管理员 PowerShell):**
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/install-services.ps1
+# verify
+Get-Service ASG-* | Format-Table -Auto   # expect 5 Running/Automatic
+curl http://127.0.0.1:8090/healthz; curl http://127.0.0.1:8901/health; curl http://127.0.0.1:8903/health
+```
+
+## Task 13 — kill recovery (<30s) ⏳ 需管理员手动执行
+
+Current status without nssm services: standalone processes (8090:24028, 8901:63536, 8902:44896, 8903:18304, cpolar:27308) are running, each port exactly 1 listener, health 200. But auto-restart (30 s recovery判据) requires nssm services (`AppRestartDelay 5000`).
+
+**需管理员在提升的 PowerShell 中执行验证（cpolar 固定域名 `asg-gateway.vip.cpolar.cn`，重启后不变）：**
+```powershell
+# 1. 以管理员身份安装 5 服务（会先停止独立进程并接管端口）
+powershell -ExecutionPolicy Bypass -File scripts/install-services.ps1
+Get-Service ASG-* | Format-Table Name,Status,StartType  # 5 Running
+
+# 2. 逐个 kill 并计时恢复（<30s 判据，不得改判据凑达标）
+foreach ($svc in "ASG-Gateway","ASG-Cpolar","ASG-Behavior","ASG-KGWorker","ASG-OutputGuard") {
+  $procName = switch ($svc) { "ASG-Gateway" {"gateway"} "ASG-Cpolar" {"cpolar"} default {"python"} }
+  # for python services kill by service-specific PID
+  $before = (Get-NetTCPConnection -LocalPort 8901,8902,8903,8090 -State Listen -EA SilentlyContinue | Measure-Object).Count
+  Write-Host "Killing $svc ..."
+  $t0 = Get-Date
+  # 获取服务对应的进程并 kill
+  if ($svc -eq "ASG-Gateway") { Stop-Process -Name gateway -Force -EA SilentlyContinue }
+  elseif ($svc -eq "ASG-Cpolar") { Stop-Process -Name cpolar -Force -EA SilentlyContinue }
+  else {
+    $port = switch ($svc) { "ASG-Behavior" {8901} "ASG-KGWorker" {8902} "ASG-OutputGuard" {8903} }
+    $pidToKill = (Get-NetTCPConnection -LocalPort $port -State Listen -EA SilentlyContinue).OwningProcess
+    if ($pidToKill) { Stop-Process -Id $pidToKill -Force -EA SilentlyContinue }
+  }
+  do { Start-Sleep 2; $svcObj = Get-Service $svc -EA SilentlyContinue; $running = $svcObj.Status -eq "Running" } until ($running -or ((Get-Date)-$t0).TotalSeconds -gt 40)
+  $elapsed = ((Get-Date)-$t0).TotalSeconds
+  "$svc : ${elapsed:N1}s $(if($elapsed -lt 30){'PASS'}else{'FAIL >30s'})"
+  if ($elapsed -ge 30) { Write-Host "STOP — 恢复超时，不得改判据" -ForegroundColor Red; break }
+}
+# 3. cpolar 域名保持
+curl.exe -s https://asg-gateway.vip.cpolar.cn/healthz   # expect 200
+```
+
+Expected: 5× `<30 s` (nssm `AppRestartDelay 5000` → ~5 s), any `≥30 s` → stop and report numbers. Result to be appended here and committed after manual run.
+
+Standalone fallback before service化 is healthy (all ports 1 listener/health 200), so the blocker is solely elevation.
 
 ---
 
