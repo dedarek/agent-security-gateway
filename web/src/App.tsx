@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Link, useParams, NavLink } from 'react-ro
 import { QueryClient, QueryClientProvider, useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from './lib/api'
 import type { Agent } from './lib/types'
+import KGGraph from './components/KGGraph'
 
 const qc = new QueryClient()
 
@@ -160,21 +161,7 @@ function Policies() {
 }
 
 function Graph() {
-  const [q, setQ] = useState('')
-  const [result, setResult] = useState<any>(null)
-  return (
-    <div style={{ padding: 24 }}>
-      <h1 style={{ fontSize: 18, fontWeight: 700 }}>本体论图谱</h1>
-      <p style={{ color: '#8092a6', fontSize: 12, marginBottom: 12 }}>Cytoscape.js 渲染，支持按 taint 溯源路径高亮（核心卖点）</p>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-        <input placeholder="搜索实体 / 关系" value={q} onChange={e => setQ(e.target.value)} style={{ flex: 1, padding: '8px 12px', background: '#161d26', border: '1px solid #232d3b', borderRadius: 6, color: '#e6ebf2' }} />
-        <button onClick={async () => { const r = await api.kgSearch(q); setResult(r) }} style={{ padding: '8px 14px', background: '#e8a317', color: '#0d1116', border: 'none', borderRadius: 6, fontWeight: 600 }}>搜索</button>
-      </div>
-      <div style={{ height: 400, background: '#161d26', borderRadius: 8, border: '1px solid #232d3b', display: 'grid', placeItems: 'center', color: '#8092a6' }}>
-        {result ? <pre style={{ fontSize: 11, maxHeight: 380, overflow: 'auto', padding: 12 }}>{JSON.stringify(result, null, 2).slice(0, 4000)}</pre> : '图谱画布（Cytoscape.js 接 /api/kg/graph/nodes, /edges）—— 后端 kgbridge 需运行'}
-      </div>
-    </div>
-  )
+  return <KGGraph />
 }
 
 function Findings() {
