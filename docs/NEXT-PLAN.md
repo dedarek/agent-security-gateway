@@ -1,223 +1,289 @@
-# ASG 下一步方案（工作稿 v0 — 待 40 问答复后定稿）
+# ASG 下一步方案 v1（定稿）
 
-> 生成时间：2026-08-28 北京时间
-> 代码基线：`9e5c276`，Go 12,844 行，37 个包，1 个 HTML 控制台（1,174 行）
-> 本文件是**决策记录**：现状体检 → 问题清单 → 候选技术选型（含仓库/组件/接入方式/可配置项/连接关系/场景矩阵）。
-> 未定项标注 `❓Qnn`，对应下方 40 问；答复后本文件升级为 v1 定稿。
-
----
-
-## 第 1 部分 · 现状体检（事实，不含判断）
-
-### 1.1 代码分布
-
-| 包 | 行数 | 测试文件 | 覆盖率 | 定位 |
-|---|---|---|---|---|
-| `internal/webui` | 2601 | 4 | 32.5% | 控制台 API + OTLP + public facade |
-| `cmd/asg-connect` | 2218 | 1 | **3.0%** | 探针（LLM 代理 + 注册 + 心跳 + 上报） |
-| `internal/engine` | 1046 | 1 | 30.0% | 三轴引擎（permission/datanetwork/taint/behavior） |
-| `internal/agentregistry` | 591 | 1 | 77.9% | Agent 注册表（在线判定/模型观测/会话） |
-| `internal/otlp` | 466 | 1 | 77.1% | 手写 protobuf 解码 |
-| `cmd/gateway` | 441 | **0** | — | 进程装配 |
-| `internal/outputsafety` | 439 | 1 | 16.8% | 输出安全 |
-| `internal/proxy` | 417 | 1 | 20.2% | MCP 决策管道 |
-| `internal/ingress` | 324 | **0** | — | MCP 接入 |
-| `internal/receipt` | 271 | **0** | — | 签名回执 |
-| `internal/intel` | 224 | **0** | — | 情报 |
-| `internal/monitor` `judge` `store` `session` `registry` `kg` `policyversion` `authn` `approval` `escalation` `mcpproxy` | 各 95–185 | **0** | — | 全部零测试 |
-
-**零测试且 >90 行的包共 14 个**，合计约 2,100 行。
-
-### 1.2 HTTP 路由全表（44 条）
-
-```
-控制台/鉴权   /  /login  /api/ui-login  /healthz  /explorer  /explorer/
-Agent 生命周期 /api/agents  /api/agents/register  /api/agents/heartbeat
-              /api/agents/detail  /api/agents/action  /api/activity   ← 新增
-遥测接收      /v1/traces  /v1/logs  /v1/metrics                      ← 新增
-LLM 门面      /v1/  /v1/messages  /v1/responses  /responses
-MCP           /mcp
-决策/事件     /api/ingest  /api/events  /api/sessions  /api/query  /api/status
-              /api/trajectory  /api/hook-check
-策略          /api/policies/current  /history  /rollback
-审批/建议     /api/approvals  /api/suggestions  /api/suggestion/decide
-知识图谱      /api/kg/ask  /search  /graph/nodes  /graph/edges  /graph/path
-其他          /api/receipts  /verify  /api/registry  /sync  /api/siem
-              /api/judge/findings  /api/monitor/findings  /api/clusters
-```
-
-### 1.3 依赖（极简，这是优点）
-
-```
-github.com/cedar-policy/cedar-go v1.8.0        权限策略引擎（AWS 官方 Go 实现）
-github.com/modelcontextprotocol/go-sdk v1.7.0  MCP 官方 Go SDK
-github.com/google/uuid  gopkg.in/yaml.v3
-```
-OTLP protobuf **手写解码**，零依赖（`internal/otlp/receiver.go` 466 行）。
-
-### 1.4 持久化现状
-
-```
-data/agents.json        6 KB    全量重写（无原子 rename，曾被 BOM 写坏导致启动崩溃）
-data/events.jsonl       1.2 MB  仅 append，无轮转、无索引、无 TTL
-data/receipts.jsonl     13 KB
-data/mcp-registry.json  158 B
-+ 4 个手工 .bak 残留在 data/ 目录（未 gitignore 分类）
-```
-
-### 1.5 接入通道现状（本轮踩坑总结）
-
-| 通道 | 端点 | 状态 | 已知问题 |
-|---|---|---|---|
-| 探针反代（OpenAI 兼容） | `asg-connect:8181` → `/v1/chat/completions` | 可用 | 只对"愿意改 base_url"的 harness 有效；Claude Code 已被 cc-switch 占用 base_url |
-| OTLP traces | `:8090/v1/traces` | 可用 | OpenCode 插件已验证；Claude Code 默认不发 traces（beta flag） |
-| OTLP logs/metrics | `:8090/v1/logs` `/v1/metrics` | **新增，仅 ACK 不解码** | 未提取模型/会话，只刷活动 |
-| Hook 信标 | `:8090/api/activity` | **新增，已端到端验证** | 靠 harness 的 hook 机制；每种 harness 写法不同 |
-| MCP 代理 | `:8090/mcp` | 可用 | 只覆盖 MCP 工具调用，不覆盖 LLM 调用 |
-
-**本轮结论（血的教训）**：
-- `CLAUDE_CODE_ENABLE_TELEMETRY=1` 在用户这版 Claude Code 上会**污染输入框**（两次复现），OTLP 路线对 Claude Code **不可用**。
-- 不能依赖 cc-switch（用户明确否决：要通用性、泛化性）。
-- 唯一在 Claude Code 上验证可行的是**官方 hooks + `async:true` + 后台 curl**。
+> 定稿时间：2026-08-28 北京时间
+> 代码基线：`6f12d97`
+> 依据：40 问用户答复 + Claude Code telemetry 污染根因调研
+> 本文件是**决策记录 + 技术选型出处 + 实施顺序**。每项选型标注**来自哪个仓库/组件/以什么方式介入/可配置成什么样**。
 
 ---
 
-## 第 2 部分 · 问题清单（按严重度）
+## 0. 产品定位（用户定调，不可动摇）
 
-### P0 — 阻塞产品定位
-
-- **P0-1 接入模型不统一**：现在有 5 条互不相干的接入通道，每条覆盖面不同、语义不同、可靠性不同。用户要的是"一行接入、之后无感"，现状是"每台机器单独调试半小时"。
-- **P0-2 探针 3% 覆盖率**：2,218 行、承载全部 LLM 流量、只有 3% 测试覆盖。本轮 `route()` 的静默重映射 bug（永远 hy3）就是这个洞里长出来的。
-- **P0-3 观测≠管控**：控制台能看到 agent，但**看不到它在调什么工具、发什么请求**。三轴引擎（`internal/engine`）只在 MCP 路径上生效，而真实 agent 走的是 LLM 路径。**安全网关目前实际只是个"在线状态板"**。
-
-### P1 — 工程风险
-
-- **P1-1 `agents.json` 非原子写**：已经崩过一次（BOM）。需要 `write tmp + rename`。
-- **P1-2 `events.jsonl` 无边界**：1.2 MB 且只增不减，无轮转/TTL/索引，查询靠全表扫。
-- **P1-3 14 个包零测试**：`ingress` `receipt` `store` `session` `monitor` `judge` 等核心路径。
-- **P1-4 `cmd/gateway` 零测试**：441 行装配逻辑，改一次配置就可能起不来。
-- **P1-5 单文件前端 1,174 行 HTML**：无构建、无组件、无状态管理，改一处容易碰坏另一处。
-- **P1-6 后台进程手工管理**：gateway / asg-connect / cpolar / kg-worker 靠 `Stop-Process` + 手动重启，没有 supervisor。
-
-### P2 — 功能缺口
-
-- **P2-1 OTLP logs/metrics 不解码**：Claude Code 的 `api_request` 事件里带真实模型名，现在丢掉了。
-- **P2-2 无模型真值校验**：agent 声称的 model 与实际上游跑的 model 无法交叉验证（本轮核心痛点）。
-- **P2-3 无 hook 分发器**：每种 harness 的 hook 配置要手写 JSON，没有 `asg-connect init --app claude-code` 自动写入。
-- **P2-4 无告警/通知**：offline、异常模型、策略命中都没有出口。
-- **P2-5 KG / judge / intel / monitor 四个子系统未在控制台闭环**：有 API 无 UI 消费。
+| 维度 | 结论 |
+|---|---|
+| 第一目标 | **管控**（拦截）。可见性第二，但同样重要。 |
+| 目标用户 | **SaaS 形态，为 agent 提供安全防护**（多租户）。 |
+| 拦截范围 | **所有操作**：MCP 工具 + 普通 tools + 敏感操作额外把关。 |
+| 差异化卖点 | **事后 semantic 知识图谱 / 本体论分析** + solid 的 agent 安全防护。 |
+| 接入红线 | **能不改用户配置就不改**。指向 base_url 侵入太深——agent 频繁切换模型来源时要多改一层，维护成本高。但**仍然要拿到真实模型**。 |
+| 安装约束 | 远端**只装一次**，之后完全无感。hook 或探针都可以。 |
+| 安装形式 | **手工可读的分步命令**，交给 agent 自己执行。不用 `curl \| sh`。 |
+| 回滚 | **必须支持**。 |
 
 ---
 
-## 第 3 部分 · 候选技术选型（详细版，待确认）
+## 1. Claude Code 遥测污染根因（调研结论）
 
-> 原则遵循用户既定偏好：**免费/零成本优先；先查 GitHub 高星成熟方案再定架构；不造轮子；第三方能力声称先核实**。
+### 1.1 现象
+两次开启 `CLAUDE_CODE_ENABLE_TELEMETRY=1` 后，Claude Code 输入框出现无限乱码，必须撤销配置才能恢复。
 
-### 3.1 接入层 —— 三种候选架构
+### 1.2 根因（双重）
 
-#### 候选 A：Hook-First（当前已验证可行）
+**根因 A — OTel 诊断日志抢占 tty（这是我们踩的坑）**
+- Claude Code TUI 基于 **Ink**（React for CLI），靠 ANSI 光标控制序列精确重绘界面。
+- OpenTelemetry JS SDK 的诊断日志器 `diag` **默认级别 `INFO`**，通过 `DiagConsoleLogger` 直接写 `console`（stdout/stderr）。
+  - 出处：`open-telemetry/opentelemetry-js` — `@opentelemetry/sdk-node` 文档「Configure log level from the environment：`OTEL_LOG_LEVEL`，默认 `INFO`」。
+- 两者共用同一个 tty → OTel 每写一行日志，Ink 记录的光标位置就失效 → 重绘错位 → 输入框被覆盖成乱码。
+- **我们前两次配置都没有设 `OTEL_LOG_LEVEL`**，等于默认让 SDK 往终端喷日志。
 
-**技术来源**
-- Claude Code 官方 hooks：`https://code.claude.com/docs/en/hooks` — `PreToolUse` / `PostToolUse` / `SessionStart` / `Stop`，`type:command`，`async:true` 不阻塞主循环。
-- OpenCode 插件机制：`@devtheops/opencode-plugin-otel`（已在本机 `opencode.jsonc` 使用）。
-- Codex `notify` 脚本钩子。
-- Gemini CLI extensions。
+**根因 B — console exporter 直接打印遥测到 stdout**
+- `OTEL_METRICS_EXPORTER=console` 是官方调试用法，会**每个导出周期把指标对象打印到终端**。
+  - 出处：Claude Code 官方文档 monitoring-usage §"console exporter prints metrics to your terminal every second"。
+- 若 exporter 未显式钉死为 `otlp`，回退到 `console` 即刻污染界面。
 
-**介入方式**：`asg-connect init --app <harness>` 探测已安装 harness，**合并**（非覆盖）写入其配置文件的 hook 段，命令体为
-```
-curl -s -X POST $HUB/api/activity -d '{...}' >/dev/null 2>&1 &
-```
-
-**可配置项**：`hub_url` / `agent_id` / `tenant_key` / 采样率 / 上报字段白名单（是否含 tool 名、参数摘要）。
-
-**优点**：官方支持、不碰 base_url、不碰 API key、已在 Claude Code 上验证不炸。
-**缺点**：每种 harness 写法不同（需维护适配矩阵）；只能拿到 harness 愿意给的信息；**拿不到真实模型名**（除非 hook payload 里有）。
-
-#### 候选 B：Proxy-First（探针反代，现状主路径）
-
-**技术来源**：自研 `cmd/asg-connect`（2,218 行）。同类高星方案：
-- `BerriAI/litellm`（★20k+，Python，LLM 网关事实标准，支持 100+ provider、callback 钩子、Langfuse/Helicone 集成）
-- `maximhq/bifrost`（Go，声称 Claude Code 一行接入 `claude mcp add --transport http bifrost`）
-- `Portkey-AI/gateway`（★7k+，TS/Cloudflare Workers，AI gateway + guardrails）
-- `Helicone/helicone`（★3k+，proxy 架构，任何 HTTP LLM provider）
-
-**介入方式**：agent 的 `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` 指向探针。
-
-**优点**：能看到**全量请求/响应**，模型真值、token、延迟、内容全在手；三轴引擎可以真正在 LLM 路径上生效（解决 P0-3）。
-**缺点**：**要求 agent 改 base_url** —— 与 cc-switch 之类的模型路由代理冲突；一旦探针挂了 agent 就不能用（本轮已发生）。
-
-#### 候选 C：Sidecar-Collector（OTel Collector 标准形态）
-
-**技术来源**
-- `open-telemetry/opentelemetry-collector-contrib`（★3k+，官方）— 远端跑一个 collector，agent 发本地 `:4317`，collector 再批量转发到网关，**网络抖动不影响 agent**。
-- Elastic 的 Claude Code 监控方案就是这个形态。
-
-**优点**：解耦、有重试/缓冲/批处理、协议标准。
-**缺点**：远端要**多跑一个进程**（用户明确拒绝"远端跑额外组件"）。
-
-> ❓Q1–Q8 讨论选哪条主路径 / 是否分场景组合。
-
-### 3.2 数据面 —— 存储与查询
-
-| 方案 | 来源 | 介入方式 | 适配场景 |
-|---|---|---|---|
-| **当前** JSONL + JSON | 自研 | 直接文件 | 单机、小量 |
-| **SQLite (modernc.org/sqlite)** | `modernc.org/sqlite`（★3k+，**纯 Go 无 CGO**，Windows 友好） | 替换 `internal/store`，events/agents/receipts 建表+索引 | 单机万级事件、需要 WHERE/ORDER/聚合 |
-| **DuckDB** | `marcboeker/go-duckdb`（需 CGO） | 分析侧只读 | 事后分析、SOC 报表 |
-| **ClickHouse** | Helicone 用的就是这个 | 独立服务 | 百万级、多租户 SaaS |
-
-> ❓Q9–Q13 讨论存储演进节奏与规模目标。
-
-### 3.3 策略/规则层
-
-- **已用**：`cedar-policy/cedar-go`（AWS 官方，权限轴）。
-- **候选补充**：
-  - `invariantlabs-ai/invariant`（行为/因果轴，已有 sidecar 桩 `internal/engine/behavior.go` → `:8901`，**当前未真正跑起来**）
-  - `open-policy-agent/opa`（★9k+，Rego，通用策略，Go 原生嵌入）
-  - `guardrails-ai/guardrails`（输出安全）
-  - `protectai/llm-guard`（★1k+，prompt injection / PII / toxicity 检测）
-  - `NVIDIA/NeMo-Guardrails`（★4k+，对话级护栏）
-
-> ❓Q14–Q20 讨论策略引擎收敛、行为轴是否落地、护栏用哪家。
-
-### 3.4 控制台前端
-
-| 方案 | 来源 | 介入方式 |
-|---|---|---|
-| **当前** 单文件 HTML | 自研 1,174 行 | `go:embed` |
-| **htmx + Alpine.js** | 零构建，CDN 引入 | 保持 `go:embed`，服务端渲染片段 |
-| **Vite + React + shadcn/ui** | 标准前端工程 | 独立 `web/`，构建产物 `go:embed` |
-| **Grafana 面板** | 数据源用 SQLite/Prometheus | 完全外置，网关只出数据 |
-
-> ❓Q21–Q26 讨论控制台定位与技术栈。
-
-### 3.5 进程与部署
-
-- **候选**：`nssm` / Windows Service / `supervisord` / Docker Compose / systemd（远端 Linux/Mac 用 `launchd`/`systemd --user`）。
-- **公网入口**：当前 cpolar 专业版固定子域；候选 `cloudflared`（免费固定域名）、`frp`（自建）、`tailscale funnel`。
-
-> ❓Q27–Q31。
-
-### 3.6 一行接入的最终形态（目标态草案）
+### 1.3 正确配置（修正版）
 
 ```bash
-curl -fsSL https://asg-gateway.vip.cpolar.cn/install.sh | sh -s -- --key <tenant-key>
+export CLAUDE_CODE_ENABLE_TELEMETRY=1
+export OTEL_LOG_LEVEL=none            # ← 关键：关闭 SDK 诊断日志，缺这条必炸
+export OTEL_METRICS_EXPORTER=otlp     # ← 显式钉死，绝不能回退 console
+export OTEL_LOGS_EXPORTER=otlp
+export OTEL_TRACES_EXPORTER=none      # traces 需 CLAUDE_CODE_ENHANCED_TELEMETRY_BETA，不用
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+export OTEL_EXPORTER_OTLP_ENDPOINT=<hub>        # 裸 base，SDK 自行拼 /v1/logs /v1/metrics
+export OTEL_METRIC_EXPORT_INTERVAL=60000
 ```
-脚本内部：
-1. 探测已安装 harness（`~/.claude` / `~/.config/opencode` / `~/.codex` / `~/.gemini`）
-2. 生成稳定 `agent_id`（machine-id + harness 名）
-3. **合并**写入各 harness 的 hook/plugin 配置（备份原文件，幂等，可 `--uninstall` 回滚）
-4. 向 `/api/agents/register` 注册
-5. 自检：发一条 `/api/activity`，确认控制台可见，打印结果
 
-> ❓Q32–Q40 讨论安装脚本的边界、幂等、回滚、多 harness、离线机器、企业分发。
+### 1.4 但 OTLP 仍然**不能作为主干**
+
+即使配置修正，Claude Code 的 OTLP 实现有长期稳定性问题（均为 anthropics/claude-code 官方 issue）：
+
+| Issue | 现象 |
+|---|---|
+| #50567 | `OTEL_METRICS_EXPORTER=otlp` 静默 no-op —— OTLP exporter 包未打进 bundle |
+| #32699 | v2.1.72 自动更新后 telemetry 停止工作（bundle 瘦身导致初始化顺序变化） |
+| #13803 | 2.64–2.67 连续版本 telemetry 完全不产出 |
+| #66401 | v2.1.153/169 交互式 TUI 下静默不发（`claude -p` 非交互也有 #46338） |
+
+**结论**：OTLP 降级为**可选补充通道**（对 OpenCode 等实现稳定的 harness 有效），**主干走 Hook**。
 
 ---
 
-## 第 4 部分 · 待定问题索引
+## 2. 接入架构：三通道并存 + 明确降级链
 
-见对话中的 40 问；答复后本文件升级 v1，补齐：
-- 主路径选型与降级链
-- 每个组件的具体版本与接入代码位置
-- 场景矩阵（本机/局域网/公网/离线/多 harness/多租户）
-- 里程碑与验收标准（每个里程碑的"可证明完成"判据）
+```
+                    ┌──────────────────────────────────────┐
+                    │   ASG Hub (Gateway :8090)            │
+                    │   /api/activity   ← 通道1 Hook       │
+                    │   /v1/* (LLM)     ← 通道2 Proxy      │
+                    │   /v1/logs|metrics← 通道3 OTLP       │
+                    │   /mcp            ← 通道4 MCP        │
+                    └──────────────────────────────────────┘
+                              ▲         ▲          ▲
+        ┌─────────────────────┘         │          └──────────────┐
+        │                               │                         │
+  通道1 Hook（主干）              通道2 Proxy（增强）         通道3 OTLP（补充）
+  改 harness 配置文件            改 base_url（可选）        改环境变量（可选）
+  零侵入运行时                   拿全量请求/响应             拿 token/cost 指标
+  拿工具链路 + 会话              拿模型真值                 harness 实现不稳
+  拿不到模型真值                 与 cc-switch 冲突          Claude Code 不可靠
+```
+
+### 2.1 通道选择矩阵（按 harness）
+
+| Harness | 主通道 | 模型真值来源 | 备注 |
+|---|---|---|---|
+| Claude Code | **Hook**（`PostToolUse`/`SessionStart`/`Stop`） | hook payload + 可选 OTLP logs | OTLP 需带 `OTEL_LOG_LEVEL=none` |
+| OpenCode | **Plugin**（已验证 OTLP 稳定） | OTLP span 属性 | 本机 `local-yycserver` 已接 |
+| Codex | `notify` 脚本 | hook payload | 待验证 |
+| Gemini CLI | extensions | hook payload | 待验证 |
+| 自研 / LangGraph 等 | **Proxy**（愿意改 base_url 时） | 请求体 `model` 字段（真值） | 三轴引擎全量生效 |
+
+### 2.2 降级链
+
+1. 优先 Hook（不碰任何运行时配置）。
+2. 用户愿意改 base_url → 叠加 Proxy，**升级为全量管控**（三轴引擎生效 + 模型真值）。
+3. harness OTLP 实现稳定 → 叠加 OTLP，补充 token/cost 指标。
+4. 三者都失败 → 仅注册 + 心跳，显示 `registered, no telemetry`。
+
+### 2.3 模型真值策略（用户已接受限制）
+
+- 前面挂了 cc-switch 这类路由代理时，ASG **无法**知道真值 —— 用户明确接受。
+- **退一步方案（用户同意）**：显示模型 + **来源标注**
+  - `self-reported`（harness 声称，灰色标记）
+  - `gateway-observed`（走 Proxy 通道，网关亲眼所见，绿色标记）
+- **不做模型指纹探测**（用户明确否决）。
+- **模型变更历史要做**（用户明确要求）：时间线 + "检测到模型切换" 事件。
+
+---
+
+## 3. 技术选型明细（仓库 / 组件 / 介入方式 / 可配置项）
+
+### 3.1 接入层
+
+#### 3.1.1 Hook 分发器 `asg-connect init`
+
+- **来源**：自研，但 hook 规范来自各 harness 官方文档
+  - Claude Code：`https://code.claude.com/docs/en/hooks` — `PreToolUse` / `PostToolUse` / `SessionStart` / `SessionEnd` / `Stop`，`type:command`，`async:true`
+  - OpenCode：`opencode.jsonc` 的 `plugin` 数组
+  - Codex：`notify` 配置项
+- **介入方式**：探测 harness 配置文件存在性 → **JSON 合并**（非覆盖）写入 hook 段 → 原文件备份为 `<file>.asg-backup-<ts>`
+- **可配置项**：
+  ```
+  hub_url         上报地址
+  agent_id        machine-id + harness 名（用户答复：这么定）
+  tenant_key      租户密钥
+  events          要挂哪些 hook（默认 PostToolUse + SessionStart + Stop）
+  detail_level    minimal(仅活动) | tool(含工具名) | full(含参数摘要)
+  sample_rate     采样率，默认 1.0
+  ```
+- **回滚**：`asg-connect uninstall` 还原备份 + 移除注册行（用户要求必须有）
+
+#### 3.1.2 Proxy 通道（现有 `cmd/asg-connect serve`）
+
+- 保留现状，但**必须补测试**（当前 3% 覆盖率，"永远 hy3" bug 就出自这里）
+- `route()` 已改为透传，不再静默重映射
+
+#### 3.1.3 OTLP 通道
+
+- 现有 `internal/otlp`（手写 protobuf 解码，466 行，零依赖）**保留**
+- 补：`/v1/logs` 深度解码，提取 Claude Code `api_request` 事件里的 `model` / `session.id` / `cost` / `token`
+  - 出处：Claude Code 官方文档 monitoring-usage 的 Events 表
+
+### 3.2 存储层（用户答复：可以换，按条数上限轮转）
+
+| 组件 | 仓库 | 介入方式 | 配置 |
+|---|---|---|---|
+| **SQLite** | `modernc.org/sqlite`（**纯 Go，无 CGO**，Windows 交叉编译友好） | 替换 `internal/store`，建表 events / agents / model_history / policy_hits，加索引 | `max_events`（条数上限轮转）、`db_path` |
+| **审计原件** | 保留 `events.jsonl` 追加式（用户答复：合规友好要保留） | 双写：SQLite 供查询，JSONL 供审计 | `audit_jsonl_enabled` |
+| **agents.json** | 并入 SQLite（用户答复：原子写或直接并入都可以） | 删除全量重写路径，根除 BOM 崩溃 | — |
+| **签名回执** | **砍掉**（用户答复：不需要） | 移除 `internal/receipt` 及 `/api/receipts*` | — |
+
+### 3.3 策略与引擎（用户答复：三轴必须接到 LLM 路径，不能只在 MCP）
+
+| 轴 | 组件 | 仓库 | 状态 | 动作 |
+|---|---|---|---|---|
+| A 权限 | Cedar | `cedar-policy/cedar-go` v1.8.0 | 已跑 | 保留 |
+| A 权限（补） | OPA/Rego | `open-policy-agent/opa` | 未引 | **允许引入**（用户答复：不必坚持单一语言，效果优先） |
+| B 数据/网络 | Pipelock 规则包 | `deploy/rules/pipelock-community.yaml` | 已跑 | 保留 |
+| C 行为/因果 | Invariant | `invariantlabs-ai/invariant` | **桩，未真跑** | **必须落地**（用户答复：要落地）。Python sidecar `:8901` |
+| 输出安全 | **llm-guard** | `protectai/llm-guard` | 未引 | **引入**（用户答复：引入，Python 依赖没关系）。prompt injection / PII / toxicity |
+
+**关键改造（P0）**：三轴引擎目前只挂在 `/mcp` 路径的 `proxy.Gateway` 上。必须把同一套 `engine.Registry` 接到 **LLM 路径**（`asg-connect serve` 的 `handleLLM` + 网关 `/v1/*` facade），使 prompt / 工具调用 / 响应内容都过策略。
+
+### 3.4 策略动作（用户答复：记录/告警/拦截都要，且要能对不同 agent 分别制定）
+
+- **每 agent 策略**：控制台可为每个 agent 单独配置策略集
+- **动作**：`log` / `alert` / `block`
+- **拦截时 agent 看到什么**：**根据触发的问题返回对应错误**（用户明确要求），例如
+  ```json
+  {"error":{"type":"asg_policy_block","code":"DATA_EXFIL_RISK",
+   "message":"Blocked by ASG: tool `send_email` would transmit data tainted by `read_secret`.",
+   "policy":"pipelock/exfil-01","trace_id":"..."}}
+  ```
+
+### 3.5 在线状态策略（用户答复：让我定）
+
+**定案**：
+- **只用活动，不用心跳判在线**（用户倾向"只用调用"，且心跳曾导致"永远 online" bug）
+- 心跳保留但**只写 `last_heartbeat`**，用于区分"进程活着但闲置" vs "进程没了"
+- 状态三态：
+  | 状态 | 判据 | UI |
+  |---|---|---|
+  | `active` | 5 分钟内有真实活动 | 绿灯 |
+  | `idle` | 无活动，但 2 分钟内有心跳（进程还在） | 黄灯 |
+  | `offline` | 既无活动也无心跳 | 灰灯 |
+- **UI 分两个指示灯**（活动灯 + 进程灯）
+- offline **只能手动删除**（用户明确要求）
+
+### 3.6 "正在做什么"（用户要求：非常详细，整个工作链路 + 每步安全信息）
+
+- 数据来源：Hook 的 `PostToolUse` payload（工具名 + 参数摘要）+ Proxy 的请求/响应 + 三轴判定结果
+- UI 形态：**工作链路时间线**
+  ```
+  session: fix-login-bug
+  ├─ 10:22:01  Read      src/auth.go              ALLOW
+  ├─ 10:22:04  Grep      "password"               ALLOW  ⚠ taint:secret
+  ├─ 10:22:09  Edit      src/auth.go              ALLOW
+  └─ 10:22:15  Bash      curl -X POST api.x.com   BLOCK  ⛔ exfil-01
+  ```
+
+### 3.7 控制台（用户答复：React 正经工程 + 补子系统 UI + 实时推送）
+
+| 项 | 选型 | 出处 |
+|---|---|---|
+| 框架 | **Vite + React + TypeScript** | 标准前端工程 |
+| UI 库 | **shadcn/ui + Tailwind** | `shadcn-ui/ui` |
+| 图表 | **Recharts** | `recharts/recharts` |
+| 图谱可视化 | **Cytoscape.js** 或 **react-force-graph** | 用于 semantic KG / 本体论展示（**核心卖点**） |
+| 实时推送 | **SSE**（`text/event-stream`，比 WebSocket 简单，单向足够） | 用户答复：要实时推送 |
+| 打包 | `go:embed` 构建产物 | 保持单二进制分发 |
+| 补 UI 的子系统 | KG / judge / intel / monitor（用户答复：要补） | — |
+| 告警出口 | **先不接外部**，只在前端展示（用户答复） | — |
+
+### 3.8 进程自愈（用户答复：四个进程要自愈）
+
+- **Windows**：`nssm`（Non-Sucking Service Manager）或原生 Windows Service 包装
+  - 托管：`gateway.exe`、`asg-connect.exe`、`cpolar`、`kg-worker`
+  - 配置：崩溃自动重启、开机自启、日志轮转
+- **公网入口**：**继续 cpolar**（用户答复：cpolar）
+
+### 3.9 测试策略（用户答复：功能优先，测试跟进）
+
+- 不阻塞功能开发，但**每个新模块必须带测试**
+- 存量 14 个零测试包，按"被改到才补"的原则跟进
+- **例外**：`cmd/asg-connect` 覆盖率 3% 且承载全部 LLM 流量，**必须优先补到 60%+**（这里出过生产 bug）
+
+---
+
+## 4. 实施顺序（里程碑 + 可证明的验收判据）
+
+### M1 · 接入闭环（1 周内）
+1. `asg-connect init` hook 分发器（Claude Code / OpenCode 两种）
+2. `asg-connect uninstall` 回滚
+3. `/api/activity` 扩展：接收工具名 + 会话 + 链路
+4. 在线三态（active / idle / offline）
+- **验收**：远端 Mac 执行分步命令后，正常使用 Claude Code，控制台出现该 agent 的**工具调用链路**，5 分钟内活动则绿灯，退出后转灰。**全程未改 base_url、未设 OTEL 变量、未污染输入框。**
+
+### M2 · 存储与显示（1 周）
+1. SQLite（`modernc.org/sqlite`）替换 store，条数上限轮转
+2. `agents.json` 并入，根除 BOM 崩溃
+3. 模型变更历史 + 来源标注（self-reported / gateway-observed）
+4. 砍掉 `internal/receipt`
+- **验收**：10 万条事件下查询 < 100ms；杀进程重启无数据损坏。
+
+### M3 · 管控落地（2 周，**核心里程碑**）
+1. 三轴引擎接入 LLM 路径（不只 MCP）
+2. Invariant 行为轴 sidecar 真正跑起来
+3. 引入 `protectai/llm-guard`
+4. 每 agent 策略配置 + 三种动作（log/alert/block）
+5. 拦截错误按触发问题返回结构化错误
+- **验收**：构造一次"读密钥 → 外发"的攻击链，agent 侧收到明确的 `asg_policy_block` 错误，控制台显示完整链路 + 命中策略。
+
+### M4 · 控制台重构（2 周）
+1. Vite + React + shadcn 重写
+2. SSE 实时推送
+3. KG / judge / intel / monitor 四个子系统补 UI
+4. **semantic 图谱 / 本体论视图**（核心卖点，重点投入）
+- **验收**：控制台不再是单文件 HTML；图谱视图可交互展示 agent 行为本体论。
+
+### M5 · 运维加固（1 周）
+1. nssm 托管四进程 + 自愈
+2. `cmd/asg-connect` 测试覆盖到 60%+
+- **验收**：手动 kill 任一进程，30 秒内自动恢复。
+
+---
+
+## 5. 与用户既定规则的一致性检查
+
+| 规则 | 本方案是否遵守 |
+|---|---|
+| 只显示注册 Agent，不自采集 | ✅ `/api/activity` 与 OTLP 均校验已注册 |
+| 离线显示 offline 不消失 | ✅ 三态设计，仅手动删除 |
+| 所有时间北京时间 | ✅ 沿用 `fmtBeijing` |
+| 在线 = 5 分钟真实活动，心跳不算 | ✅ 心跳只写 `last_heartbeat` |
+| 模型必须透传，禁写死 | ✅ `route()` 已改透传，`allowed_models`/`model_map` 已删 |
+| 一行/分步接入，之后无感 | ✅ hook 装一次，零运行时侵入 |
+| 远端不跑额外组件、不改配置、不发探测 | ✅ hook 仅改 harness 配置文件一次；不发探测（已否决指纹） |
+| 不造轮子，先查高星方案 | ✅ Cedar / Invariant / llm-guard / modernc-sqlite / shadcn 均为成熟开源 |
+| 免费零成本优先 | ✅ 全部开源；cpolar 沿用现有 |
