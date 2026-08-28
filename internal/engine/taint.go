@@ -69,6 +69,82 @@ func (t *TaintEngine) ObserveResult(sessionID, toolID string, output []byte) {
 	t.store.MarkUntrusted(sessionID, name, content, extractTokens(content))
 }
 
+// ObserveHook is the hook-path (PreToolUse/PostToolUse) counterpart of
+// ObserveResult. Harness hooks are config-only: there is no proxy in the data
+// path, so the gateway never sees raw tool output for most events. This method
+// implements session-level data-flow propagation from the hook payload alone:
+//
+//  1. SOURCE ingest — if the tool is a taint source and the payload carries
+//     tool_response (PostToolUse), the real output content is the taint mark.
+//     If there is no output yet (PreToolUse), a *sensitive path* in tool_input
+//     (.aws/credentials, .ssh/id_rsa, .env, ...) marks the session as having
+//     touched a secret, with that path as the provenance token.
+//  2. DERIVATION — for ANY tool, if the call's arguments reference an existing
+//     taint token AND the call produces a new artifact (shell redirect, -o,
+//     tee, Write file_path), that artifact becomes a derived taint mark. This
+//     is the actual propagation step: secret path -> /tmp/x -> egress.
+//
+// Together these give a causal chain, not a path-matching heuristic: step 3 is
+// blocked because /tmp/x is provably derived from the credentials file read in
+// step 1, and the block reason names that lineage.
+func (t *TaintEngine) ObserveHook(sessionID, toolID string, payload []byte) {
+	if sessionID == "" || len(payload) == 0 {
+		return
+	}
+	name := lastSegment(toolID)
+	input, response := hookParts(payload)
+	values := flattenValues(input)
+
+	// (1) source ingest
+	if t.sources[name] {
+		if strings.TrimSpace(response) != "" {
+			toks := extractTokens(response)
+			for _, p := range filePaths(values) {
+				toks = append(toks, sensitiveTokens(p)...)
+			}
+			t.store.MarkUntrusted(sessionID, name, response, toks)
+		} else {
+			for _, p := range filePaths(values) {
+				if isSensitivePath(p) {
+					t.store.MarkUntrusted(sessionID, name+":"+p, p, sensitiveTokens(p))
+				}
+			}
+		}
+	}
+
+	// (2) derivation: tainted input -> new artifact
+	marks := t.store.Taints(sessionID)
+	if len(marks) == 0 {
+		return
+	}
+	var origin string
+	for _, v := range values {
+		for _, m := range marks {
+			if _, ok := tokenFlow(v, m); ok {
+				origin = m.Source
+				break
+			}
+		}
+		if origin != "" {
+			break
+		}
+	}
+	if origin == "" {
+		return
+	}
+	existing := map[string]bool{}
+	for _, m := range marks {
+		existing[m.Content] = true
+	}
+	for _, art := range producedArtifacts(name, input, values) {
+		if art == "" || existing[art] {
+			continue
+		}
+		t.store.MarkUntrusted(sessionID, "derived("+origin+")", art, []string{art})
+		existing[art] = true
+	}
+}
+
 // EvaluatePre blocks a sink call whose arguments flow from untrusted content.
 func (t *TaintEngine) EvaluatePre(_ context.Context, c *api.ToolCall) (*api.Signal, error) {
 	name := lastSegment(c.ToolID)
@@ -81,6 +157,12 @@ func (t *TaintEngine) EvaluatePre(_ context.Context, c *api.ToolCall) (*api.Sign
 	}
 
 	values := argValues(c.Arguments)
+	// Generic sinks (Bash/Write) only count as an exfil channel when the call
+	// actually egresses. Without this gate, adding Bash to taint_sinks would
+	// block every local command in a session that once read a secret.
+	if !isEgress(name, values) {
+		return &api.Signal{Axis: api.AxisBehavior, Engine: t.Name(), Verdict: api.VerdictAllow}, nil
+	}
 	// Pass 1: high-signal token match (emails/URLs/hosts) — the headline exfil channel.
 	for _, v := range values {
 		for _, m := range marks {
@@ -110,10 +192,10 @@ func (t *TaintEngine) block(c *api.ToolCall, source, tok string) *api.Signal {
 		Score:   93,
 		Verdict: api.VerdictBlock,
 		Reasons: []string{fmt.Sprintf(
-			"value %q in %s originated from untrusted source %s (data-flow taint)", tok, c.ToolID, source)},
+			"value '%s' in %s originated from untrusted source %s (data-flow taint)", tok, c.ToolID, source)},
 		Evidence: []api.Evidence{{
 			Kind:   "taint",
-			Detail: fmt.Sprintf("untrusted %s -> %s argument (%q)", source, lastSegment(c.ToolID), tok),
+			Detail: fmt.Sprintf("untrusted %s -> %s argument ('%s')", source, lastSegment(c.ToolID), tok),
 		}},
 		FailMode: t.failMode,
 	}
@@ -171,7 +253,8 @@ func extractTokens(text string) []string {
 	return out
 }
 
-// argValues returns the string leaf values of a JSON arguments blob.
+// argValues returns the string leaf values of a JSON arguments blob. Hook
+// payloads nest the real arguments under tool_input, so this walks recursively.
 func argValues(raw []byte) []string {
 	if len(raw) == 0 {
 		return nil
@@ -181,11 +264,5 @@ func argValues(raw []byte) []string {
 		// Fall back to scanning the raw text for tokens.
 		return extractTokens(string(raw))
 	}
-	var out []string
-	for _, v := range m {
-		if s, ok := v.(string); ok {
-			out = append(out, s)
-		}
-	}
-	return out
+	return flattenValues(m)
 }

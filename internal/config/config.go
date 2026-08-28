@@ -77,8 +77,10 @@ func Default() Config {
 		CedarPolicyPath:          "./deploy/policies/permission.cedar",
 		RulesPath:                "./deploy/rules/pipelock-community.yaml",
 		UpstreamCommand:          []string{"./bin/upstream-mcp"},
-		TaintSources:             []string{"get_inbox", "read_secret", "fetch", "read_file"},
-		TaintSinks:               []string{"send_email", "http_post", "export_all_users"},
+		// Include real harness tool names (Claude Code / OpenCode) alongside the
+		// MCP demo tools: hook-onboarded agents only ever emit Read/Bash/WebFetch.
+		TaintSources:             []string{"get_inbox", "read_secret", "fetch", "read_file", "Read", "Grep", "Glob"},
+		TaintSinks:               []string{"send_email", "http_post", "export_all_users", "Bash", "WebFetch", "Write"},
 		IncludeExperimentalRules: false,
 		EventLogPath:             "./data/events.jsonl",
 		UIListen:                 ":8090",

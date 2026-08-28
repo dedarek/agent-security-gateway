@@ -16,8 +16,12 @@ rules_path: "./deploy/rules/pipelock-community.yaml"
 
 # Behavior/causal axis: content-based taint sources and egress sinks
 # (unqualified tool names).
-taint_sources: ["get_inbox", "read_secret", "fetch", "read_file"]
-taint_sinks:   ["send_email", "http_post", "export_all_users"]
+# Real harness tool names (Claude Code / OpenCode hook path) are included:
+# hook-onboarded agents emit Read/Grep/Glob as sources and Bash/WebFetch/Write
+# as sinks. Generic sinks only trip when the call actually egresses (see
+# engine.isEgress), so local commands are not false-positived.
+taint_sources: ["get_inbox", "read_secret", "fetch", "read_file", "Read", "Grep", "Glob"]
+taint_sinks:   ["send_email", "http_post", "export_all_users", "Bash", "WebFetch", "Write"]
 
 include_experimental_rules: false
 # extra_trusted_keys_hex: ""   # optional third-party rule signers

@@ -167,6 +167,12 @@ func (s *Server) apiAgentActivity(w http.ResponseWriter, r *http.Request) {
 	verdictStr := "ALLOW"
 	var decision *api.Decision
 	if s.Engine != nil && toolName != "" {
+		// BUG-B fix: the hook path has no proxy in the data path, so
+		// ResultObserver/ObserveResult never fires here and the taint axis was
+		// dead for every hook-onboarded agent. Feed the raw hook payload to
+		// hook-aware engines FIRST so this call's own provenance (source ingest
+		// + derived artifacts) is visible to the decision below.
+		s.Engine.ObserveHook(sessionID, toolName, body.HookPayload)
 		call := api.ToolCall{
 			CallID:    fmt.Sprintf("hook-%d", time.Now().UnixNano()),
 			Principal: api.Principal{AgentID: agentID, SessionID: sessionID},

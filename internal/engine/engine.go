@@ -52,6 +52,28 @@ func (r *Registry) Register(e Engine) { r.engines = append(r.engines, e) }
 
 func (r *Registry) Engines() []Engine { return r.engines }
 
+// HookObserver is implemented by engines that can learn from a raw harness
+// hook payload (PreToolUse/PostToolUse) when there is no proxy in the data
+// path. This is what gives config-only hook deployments the same causal/taint
+// capability the MCP proxy path gets via ResultObserver.
+type HookObserver interface {
+	ObserveHook(sessionID, toolID string, payload []byte)
+}
+
+// ObserveHook feeds a raw hook payload to every hook-aware engine. Call this
+// BEFORE EvaluatePre so the current call's own provenance is available to the
+// decision.
+func (r *Registry) ObserveHook(sessionID, toolID string, payload []byte) {
+	if sessionID == "" || len(payload) == 0 {
+		return
+	}
+	for _, e := range r.engines {
+		if h, ok := e.(HookObserver); ok {
+			h.ObserveHook(sessionID, toolID, payload)
+		}
+	}
+}
+
 // EvaluatePre runs every engine's pre hook in PARALLEL with a deadline and
 // aggregates the signals into a Decision. A per-call timeout keeps the gateway
 // latency bounded even when a third-party engine misbehaves.
