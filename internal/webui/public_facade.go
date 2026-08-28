@@ -103,6 +103,52 @@ func (s *Server) publicLLM(w http.ResponseWriter, r *http.Request) {
 	}
 	s.TrackPublicAgent(r, requestMeta.Model)
 
+	// M3: evaluate LLM request through engine before proxying (管控第一)
+	if s.Engine != nil {
+		call := api.ToolCall{
+			CallID:    fmt.Sprintf("llm-%d", time.Now().UnixNano()),
+			Principal: api.Principal{AgentID: agentID, SessionID: sessionID},
+			ToolID:    "llm.chat",
+			Resource:  "llm",
+			Action:    "inference",
+			Arguments: body,
+			Timestamp: time.Now().UTC(),
+		}
+		d := s.Engine.EvaluatePre(r.Context(), &call)
+		if d.Final == api.VerdictBlock {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{
+					"type":    "asg_policy_block",
+					"code":    "LLM_POLICY_BLOCK",
+					"message": d.Rationale,
+					"axis":    "permission",
+					"risk":    d.Risk,
+				},
+			})
+			s.writePublicLLMEvent(agentID, sessionID, requestMeta.Model, "", http.StatusForbidden, d.Rationale)
+			// Also store as blocked event
+			if s.Store != nil {
+				_ = s.Store.Write(api.Event{SessionID: sessionID, Call: call, Decision: d, Timestamp: time.Now().UTC()})
+			}
+			return
+		}
+		if d.Final == api.VerdictConfirm {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{
+					"type":    "asg_policy_confirm",
+					"code":    "SENSITIVE_OP_CONFIRM",
+					"message": d.Rationale,
+					"axis":    "permission",
+				},
+			})
+			return
+		}
+	}
+
 	u, err := url.Parse(s.publicLLMUpstream + r.URL.Path)
 	if err != nil {
 		http.Error(w, "invalid LLM upstream", http.StatusInternalServerError)

@@ -1,13 +1,16 @@
 package webui
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/dedarek/agent-security-gateway/api"
 	"github.com/dedarek/agent-security-gateway/internal/activity"
 	"github.com/dedarek/agent-security-gateway/internal/agentregistry"
 	"github.com/dedarek/agent-security-gateway/internal/otlp"
@@ -160,6 +163,38 @@ func (s *Server) apiAgentActivity(w http.ResponseWriter, r *http.Request) {
 	if kind == "" {
 		kind = "tool_use"
 	}
+	// Evaluate through engine (M3): if sensitive or policy blocks, we record verdict
+	verdictStr := "ALLOW"
+	var decision *api.Decision
+	if s.Engine != nil && toolName != "" {
+		call := api.ToolCall{
+			CallID:    fmt.Sprintf("hook-%d", time.Now().UnixNano()),
+			Principal: api.Principal{AgentID: agentID, SessionID: sessionID},
+			ToolID:    toolName,
+			Resource:  toolName,
+			Action:    mapToolToAction(toolName),
+			Arguments: body.HookPayload,
+			Timestamp: now,
+		}
+		// For data-network taint, we need session context — use background with timeout inside engine
+		d := s.Engine.EvaluatePre(context.Background(), &call)
+		decision = &d
+		verdictStr = d.Final.String()
+		// Also evaluate post with empty result to catch output-side checks (stub)
+		// Persist as event for audit/UI trajectory
+		if s.Store != nil {
+			ev := api.Event{
+				SessionID: sessionID,
+				Call:      call,
+				Decision:  d,
+				Timestamp: now,
+			}
+			if d.Final == api.VerdictBlock || d.Final == api.VerdictConfirm {
+				ev.Result = &api.ToolResult{CallID: call.CallID, Output: []byte(verdictStr + ": " + d.Rationale)}
+			}
+			_ = s.Store.Write(ev)
+		}
+	}
 	// Persist activity chain.
 	if s.Activity != nil {
 		step := activity.Step{
@@ -169,7 +204,11 @@ func (s *Server) apiAgentActivity(w http.ResponseWriter, r *http.Request) {
 			Kind:      kind,
 			ToolName:  toolName,
 			Summary:   summary,
+			Verdict:   verdictStr,
 			Raw:       body.HookPayload,
+		}
+		if decision != nil && decision.Rationale != "" {
+			step.Reason = decision.Rationale
 		}
 		// Only store meaningful steps (kind/session/tool) or forced keepalive
 		if toolName != "" || sessionID != "" || kind == "session_start" || kind == "session_end" {
@@ -184,6 +223,48 @@ func (s *Server) apiAgentActivity(w http.ResponseWriter, r *http.Request) {
 				s.Activity.Add(step)
 			}
 		}
+	}
+	// If blocked, return blocking verdict so PreToolUse hook can enforce (non-zero exit)
+	if decision != nil && decision.Final == api.VerdictBlock {
+		// Still advance registry so activity shows
+		if body.Model != "" {
+			_ = s.Agents.ObserveModel(agentID, body.Model, "", now)
+		}
+		if sessionID != "" {
+			_ = s.Agents.ObserveSession(agentID, sessionID, now)
+		}
+		_ = s.Agents.Heartbeat(agentID, ip, nil, "", "", body.AgentType, "", now)
+		if rec, ok := s.Agents.Get(agentID); ok && rec.LastActivity.Before(now) {
+			rec.LastActivity = now
+			_ = s.Agents.Upsert(rec)
+		}
+		writeJSON(w, map[string]string{
+			"status":  "blocked",
+			"verdict": verdictStr,
+			"code":    "SENSITIVE_OP_BLOCK",
+			"message": decision.Rationale,
+		})
+		return
+	}
+	if decision != nil && decision.Final == api.VerdictConfirm {
+		if body.Model != "" {
+			_ = s.Agents.ObserveModel(agentID, body.Model, "", now)
+		}
+		if sessionID != "" {
+			_ = s.Agents.ObserveSession(agentID, sessionID, now)
+		}
+		_ = s.Agents.Heartbeat(agentID, ip, nil, "", "", body.AgentType, "", now)
+		if rec, ok := s.Agents.Get(agentID); ok && rec.LastActivity.Before(now) {
+			rec.LastActivity = now
+			_ = s.Agents.Upsert(rec)
+		}
+		writeJSON(w, map[string]string{
+			"status":  "confirm",
+			"verdict": verdictStr,
+			"code":    "SENSITIVE_OP_CONFIRM",
+			"message": decision.Rationale,
+		})
+		return
 	}
 	// Advance registry state.
 	if body.Model != "" {
@@ -308,6 +389,19 @@ func jsonOrString(v any) string {
 	}
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+func mapToolToAction(tool string) string {
+	switch tool {
+	case "Read", "Grep", "Glob", "WebFetch", "WebSearch":
+		return "read"
+	case "Write", "Edit", "MultiEdit", "NotebookEdit":
+		return "write"
+	case "Bash", "Task", "ComputerUse":
+		return "execute"
+	default:
+		return "read"
+	}
 }
 
 // apiOTLPLogs accepts ExportLogsServiceRequest. Claude Code's primary

@@ -169,6 +169,9 @@ func serveCmd(args []string) {
 	reg.Register(perm)
 	reg.Register(dn)
 	reg.Register(taint)
+	// Sensitive operations: extra review for Bash/Write/WebFetch etc
+	sensitive := engine.NewSensitiveEngine(nil, "confirm")
+	reg.Register(sensitive)
 	registerBehaviorSidecar(reg, store_, cfg)
 
 	approvals := approval.NewManager(cfg.ApprovalTimeout)
@@ -211,6 +214,7 @@ func serveCmd(args []string) {
 	} else {
 		uiSrv.SetActivityStore(activity.New())
 	}
+	uiSrv.SetEngine(reg)
 	uiSrv.SetIngestAuth(func(header string) bool {
 		_, ok := authReg.Authenticate(header)
 		return ok

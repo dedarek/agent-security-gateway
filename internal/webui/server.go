@@ -14,6 +14,7 @@ import (
 	"github.com/dedarek/agent-security-gateway/internal/activity"
 	"github.com/dedarek/agent-security-gateway/internal/agentregistry"
 	"github.com/dedarek/agent-security-gateway/internal/approval"
+	"github.com/dedarek/agent-security-gateway/internal/engine"
 	"github.com/dedarek/agent-security-gateway/internal/intel"
 	"github.com/dedarek/agent-security-gateway/internal/policyhub"
 	"github.com/dedarek/agent-security-gateway/internal/store"
@@ -29,6 +30,7 @@ type Server struct {
 	Auth       *uiAuth
 	Agents     *agentregistry.Registry
 	Activity   *activity.Store
+	Engine     *engine.Registry
 	mu         sync.RWMutex
 	suggs      map[string]*intel.Suggestion
 	ingestAuth func(header string) bool // nil = open (dev)
@@ -46,6 +48,8 @@ func New(st *store.Store, am *approval.Manager, hub *policyhub.Hub) *Server {
 func (s *Server) SetAgentRegistry(r *agentregistry.Registry) { s.Agents = r }
 
 func (s *Server) SetActivityStore(a *activity.Store) { s.Activity = a }
+
+func (s *Server) SetEngine(e *engine.Registry) { s.Engine = e }
 
 func (s *Server) SetIngestAuth(f func(header string) bool) { s.ingestAuth = f }
 
