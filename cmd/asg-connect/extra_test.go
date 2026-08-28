@@ -28,10 +28,18 @@ providers:
 	f.Write([]byte(content))
 	f.Close()
 	cfg, err := loadProbeConfig(f.Name())
-	if err != nil { t.Fatalf("load: %v", err) }
-	if cfg.HubURL != "http://gw" { t.Fatalf("hub %q", cfg.HubURL) }
-	if len(cfg.Providers) != 1 { t.Fatalf("providers %d", len(cfg.Providers)) }
-	if cfg.Listen != "127.0.0.1:18181" { t.Fatalf("listen %q", cfg.Listen) }
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.HubURL != "http://gw" {
+		t.Fatalf("hub %q", cfg.HubURL)
+	}
+	if len(cfg.Providers) != 1 {
+		t.Fatalf("providers %d", len(cfg.Providers))
+	}
+	if cfg.Listen != "127.0.0.1:18181" {
+		t.Fatalf("listen %q", cfg.Listen)
+	}
 }
 
 func TestAnthropicAdaptSanitize(t *testing.T) {
@@ -67,26 +75,90 @@ func TestHookHTTPMethodNotAllowed(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/hook-check", nil)
 	rec := httptest.NewRecorder()
 	h(rec, req)
-	// Should handle GET gracefully (maybe 405 or 200)
-	if rec.Code != 200 && rec.Code != 405 {
-		t.Logf("hook GET -> %d", rec.Code)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("want 405 for GET, got %d body=%q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "POST only") {
+		t.Fatalf("want POST only message, got %q", rec.Body.String())
+	}
+	// POST with valid JSON should succeed (200 or 403 depending on verdict)
+	req2 := httptest.NewRequest(http.MethodPost, "/api/hook-check", strings.NewReader(`{"tool_name":"Read","tool_input":{"file_path":"/tmp/a.txt"}}`))
+	rec2 := httptest.NewRecorder()
+	h(rec2, req2)
+	if rec2.Code != http.StatusOK && rec2.Code != http.StatusForbidden {
+		t.Fatalf("want 200 or 403 for POST, got %d", rec2.Code)
+	}
+	// POST with BLOCK payload should return 403
+	req3 := httptest.NewRequest(http.MethodPost, "/api/hook-check", strings.NewReader(`{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}`))
+	rec3 := httptest.NewRecorder()
+	h(rec3, req3)
+	if rec3.Code != http.StatusForbidden {
+		t.Fatalf("want 403 for BLOCK, got %d body=%q", rec3.Code, rec3.Body.String())
+	}
+	if !strings.Contains(rec3.Body.String(), "block") {
+		t.Fatalf("want block decision, got %q", rec3.Body.String())
 	}
 }
 
 func TestSpoolAndTimeUtil(t *testing.T) {
-	// Test spool path creation and time util
 	tmp := os.TempDir() + "/test-spool-m5.jsonl"
 	os.Remove(tmp)
+	os.Remove(tmp + ".queue")
+	defer os.Remove(tmp)
+	defer os.Remove(tmp + ".queue")
 	rep := newReporter("http://127.0.0.1:0", "", tmp, "t", "a")
+	if rep.spool == nil {
+		t.Fatal("spool nil")
+	}
+	if rep.spool.len() != 0 {
+		t.Fatalf("want empty spool, got %d", rep.spool.len())
+	}
 	rep.ReportLLM("s1", "m1", []byte(`{}`), []byte(`{}`), 1)
 	rep.ReportTool("s1", "tool1", []byte(`{}`), "ALLOW", "ok")
-	if err := rep.Flush(); err != nil {
-		// Flush may fail due to no hub, but should not panic
-		t.Logf("flush: %v", err)
+	// Both reports should have been enqueued (at least 2 entries)
+	if rep.spool.len() < 2 {
+		t.Fatalf("want spool len >=2, got %d", rep.spool.len())
 	}
-	// timeutil
-	_ = timeNow
-	_ = formatTime
+	if err := rep.Flush(); err == nil {
+		t.Logf("flush succeeded unexpectedly")
+	} else {
+		if !strings.Contains(err.Error(), "hub ingest") && !strings.Contains(err.Error(), "connect") && !strings.Contains(err.Error(), "dial") {
+			t.Logf("flush err: %v", err)
+		}
+	}
+	// timeNano should return non-zero
+	if timeNano() == 0 {
+		t.Fatal("timeNano zero")
+	}
+	// osOpenAppend should create file
+	f, err := osOpenAppend(tmp + ".append")
+	if err != nil {
+		t.Fatalf("osOpenAppend: %v", err)
+	}
+	f.Close()
+	defer os.Remove(tmp + ".append")
+	if _, err := os.Stat(tmp + ".append"); err != nil {
+		t.Fatalf("append file not created: %v", err)
+	}
+	// spool push/pop
+	s := newSpool(tmp + ".spooltest")
+	defer os.Remove(tmp + ".spooltest")
+	defer os.Remove(tmp + ".spooltest" + ".queue")
+	s.push([]byte(`{"kind":"test"}` + "\n"))
+	if s.len() != 1 {
+		t.Fatalf("push len want 1 got %d", s.len())
+	}
+	b, ok := s.pop()
+	if !ok || len(b) == 0 {
+		t.Fatal("pop failed")
+	}
+	s.unpop(b)
+	if s.len() != 1 {
+		t.Fatalf("unpop len want 1 got %d", s.len())
+	}
+	// markShipped when mem empty should remove file
+	s.pop()
+	s.markShipped()
 }
 
 func TestMCPSHIM(t *testing.T) {
@@ -104,29 +176,3 @@ func TestMCPSHIM(t *testing.T) {
 		t.Fatal("no code")
 	}
 }
-
-func TestRegistrySync(t *testing.T) {
-	cfg := &ProbeConfig{HubURL: "http://127.0.0.1:0", TenantName: "test", TenantKey: "k"}
-	// syncLoop should not panic even with no server
-	stop := make(chan struct{})
-	go func() { close(stop) }()
-	// Just test that syncLoop doesn't block forever
-	_ = cfg
-	_ = stop
-}
-
-func TestOutputsafetyInit(t *testing.T) {
-	// outputsafety.InitSemantic is called in serve, test it doesn't panic
-	cfg := &ProbeConfig{Providers: []Provider{{Name: "test", BaseURL: "https://x/v1", APIKey: "k"}}}
-	_ = cfg
-	// We can't test the actual init without network, but we can call the helper
-	// that is used in serve
-	if len(cfg.Providers) > 0 {
-		// Simulate init
-		_ = cfg.Providers[0].BaseURL
-	}
-}
-
-// Mock time helpers to increase coverage
-var timeNow = func() string { return "2026-01-01T00:00:00Z" }
-var formatTime = func(s string) string { return s }
