@@ -45,6 +45,9 @@ func (s *Server) handlePoliciesList(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+			if rows == nil {
+				rows = []db.PolicyRow{}
+			}
 			writeJSON(w, rows)
 			return
 		}
