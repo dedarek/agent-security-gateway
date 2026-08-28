@@ -64,7 +64,11 @@ foreach ($svc in $services) {
     nssm set $name AppDirectory $workDir
     nssm set $name DisplayName $svc.Display
     nssm set $name Description $svc.Desc
-    if ($svc.Env -and $svc.Env.Count -gt 0) { $envStr = ($svc.Env -join " "); nssm set $name AppEnvironmentExtra $envStr }
+    # nssm AppEnvironmentExtra takes each VAR=VALUE as a SEPARATE argument.
+    # Joining them with a space makes nssm treat the whole string as ONE variable,
+    # so PYTHONPATH silently gets " LOCAL_POLICY=1" appended and imports fail
+    # (observed: ModuleNotFoundError: No module named 'invariant' on ASG-Behavior).
+    if ($svc.Env -and $svc.Env.Count -gt 0) { nssm set $name AppEnvironmentExtra @($svc.Env) }
     nssm set $name AppExit Default Restart
     nssm set $name AppRestartDelay 5000
     nssm set $name AppStdout "$logDir/$name.log"
