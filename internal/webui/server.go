@@ -4,8 +4,9 @@
 package webui
 
 import (
-	_ "embed"
+	"embed"
 	"encoding/json"
+	"io/fs"
 	"net/http"
 	"strings"
 	"sync"
@@ -22,6 +23,9 @@ import (
 
 //go:embed index.html
 var page []byte
+
+//go:embed all:dist
+var webDist embed.FS
 
 type Server struct {
 	Store      *store.Store
@@ -72,17 +76,48 @@ func (s *Server) Register(mux *http.ServeMux) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
-	mux.HandleFunc("/", s.Auth.middleware(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-		}
-		// If not authenticated, serve login page instead of console
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
-		w.Header().Set("Pragma", "no-cache")
-		_, _ = w.Write(page)
-	}))
+	// New React console (web/dist) — serve static files, fallback to index.html for SPA routing
+	sub, err := fs.Sub(webDist, "dist")
+	if err == nil {
+		fileServer := http.FileServer(http.FS(sub))
+		mux.HandleFunc("/", s.Auth.middleware(func(w http.ResponseWriter, r *http.Request) {
+			// API and other registered handlers take precedence (they are matched first via exact paths)
+			// For SPA, serve index.html for any non-file path
+			if r.URL.Path != "/" && !strings.Contains(r.URL.Path, ".") {
+				// Try to serve as static file first, else SPA fallback
+				if _, err := fs.Stat(sub, strings.TrimPrefix(r.URL.Path, "/")); err == nil {
+					fileServer.ServeHTTP(w, r)
+					return
+				}
+				// SPA fallback
+				data, _ := fs.ReadFile(sub, "index.html")
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+				_, _ = w.Write(data)
+				return
+			}
+			// Try static file
+			if r.URL.Path == "/" {
+				data, _ := fs.ReadFile(sub, "index.html")
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+				_, _ = w.Write(data)
+				return
+			}
+			fileServer.ServeHTTP(w, r)
+		}))
+	} else {
+		mux.HandleFunc("/", s.Auth.middleware(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/" {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+			w.Header().Set("Pragma", "no-cache")
+			_, _ = w.Write(page)
+		}))
+	}
 	// Login page endpoint (GET returns HTML, POST processes login)
 	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
