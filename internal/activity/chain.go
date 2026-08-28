@@ -5,6 +5,7 @@
 package activity
 
 import (
+	"database/sql"
 	"encoding/json"
 	"sync"
 	"time"
@@ -35,6 +36,7 @@ type Store struct {
 	maxPerAgent int
 	maxAgents   int
 	data        map[string][]Step // agent_id -> steps (oldest first, capped)
+	db          *sql.DB
 }
 
 // New returns a Store with defaults.
@@ -45,6 +47,42 @@ func New() *Store {
 		data:        make(map[string][]Step),
 	}
 }
+
+// NewWithDB returns a Store that also persists to SQLite when db != nil.
+func NewWithDB(db *sql.DB) *Store {
+	s := New()
+	s.db = db
+	if db != nil {
+		// Hydrate recent steps into memory for fast reads
+		rows, err := db.Query(`SELECT ts, agent_id, session_id, kind, tool_name, summary, verdict, payload FROM activity_steps ORDER BY ts ASC, id ASC LIMIT 10000`)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var ts int64
+				var st Step
+				var payload string
+				if err := rows.Scan(&ts, &st.AgentID, &st.SessionID, &st.Kind, &st.ToolName, &st.Summary, &st.Verdict, &payload); err != nil {
+					continue
+				}
+				st.At = time.UnixMilli(ts).UTC()
+				if payload != "" {
+					st.Raw = json.RawMessage(payload)
+				}
+				s.data[st.AgentID] = append(s.data[st.AgentID], st)
+			}
+			// Trim per-agent to max
+			for k, v := range s.data {
+				if len(v) > s.maxPerAgent {
+					s.data[k] = v[len(v)-s.maxPerAgent:]
+				}
+			}
+		}
+	}
+	return s
+}
+
+// SetDB attaches a DB handle after construction (used by gateway main).
+func (s *Store) SetDB(db *sql.DB) { s.db = db }
 
 // Add appends a step. If the per-agent list exceeds maxPerAgent, the oldest
 // is dropped. If the number of agents exceeds maxAgents, the call is ignored
@@ -69,6 +107,19 @@ func (s *Store) Add(step Step) {
 		list = list[len(list)-s.maxPerAgent:]
 	}
 	s.data[step.AgentID] = list
+	if s.db != nil {
+		// Persist to SQLite (best-effort, no error propagation to hook path)
+		ts := step.At.UnixMilli()
+		var payload string
+		if len(step.Raw) > 0 {
+			payload = string(step.Raw)
+		}
+		_, _ = s.db.Exec(`INSERT INTO activity_steps(ts, agent_id, session_id, kind, tool_name, summary, verdict, payload) VALUES(?,?,?,?,?,?,?,?)`,
+			ts, step.AgentID, step.SessionID, step.Kind, step.ToolName, step.Summary, step.Verdict, payload)
+		// Trim per-agent cap in DB
+		_, _ = s.db.Exec(`DELETE FROM activity_steps WHERE agent_id=? AND id IN (SELECT id FROM activity_steps WHERE agent_id=? ORDER BY id DESC LIMIT -1 OFFSET ?)`,
+			step.AgentID, step.AgentID, s.maxPerAgent)
+	}
 }
 
 // List returns a copy of steps for agentID, oldest first. Empty if none.

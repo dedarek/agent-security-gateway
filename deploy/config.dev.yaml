@@ -26,6 +26,15 @@ include_experimental_rules: false
 behavior_sidecar_url: "http://127.0.0.1:8901"
 behavior_fail_open: true
 
+# Storage: SQLite as primary, JSONL retained as audit log.
+storage:
+  driver: sqlite
+  dsn: ./data/asg.db
+  max_events: 200000
+  audit_jsonl: true
+  audit_max_mb: 64
+  audit_keep: 5
+
 # Semantica KG bridge (optional; leave worker_script empty to disable)
 kg_python_bin: "python"
 kg_worker_script: "internal/kgbridge/asg_kg_worker.py"

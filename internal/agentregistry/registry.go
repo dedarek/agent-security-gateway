@@ -1,6 +1,7 @@
 package agentregistry
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -67,6 +68,7 @@ type Registry struct {
 	mu      sync.RWMutex
 	path    string
 	records map[string]Record
+	db      *sql.DB
 }
 
 func Open(path string) (*Registry, error) {
@@ -104,6 +106,74 @@ func Open(path string) (*Registry, error) {
 		r.records = clean
 	}
 	return r, nil
+}
+
+// OpenWithDB opens a registry backed by SQLite. JSON path is used for one-time
+// migration if the DB is empty, and kept as backup if configured.
+func OpenWithDB(db *sql.DB, jsonPath string) (*Registry, error) {
+	r := &Registry{path: jsonPath, records: map[string]Record{}, db: db}
+	if db != nil {
+		// Load from DB
+		rows, err := db.Query(`SELECT record_json FROM agents`)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var j string
+			if err := rows.Scan(&j); err != nil {
+				return nil, err
+			}
+			var rec Record
+			if err := json.Unmarshal([]byte(j), &rec); err != nil {
+				continue
+			}
+			if strings.TrimSpace(rec.AgentID) == "" {
+				continue
+			}
+			r.records[rec.AgentID] = rec
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		// If DB empty and JSON exists, migrate once
+		if len(r.records) == 0 && jsonPath != "" {
+			if b, err := os.ReadFile(jsonPath); err == nil && len(b) > 0 {
+				var m map[string]Record
+				if json.Unmarshal(b, &m) == nil {
+					for _, rec := range m {
+						if strings.TrimSpace(rec.AgentID) == "" {
+							continue
+						}
+						r.records[rec.AgentID] = rec
+						_ = upsertAgentDB(db, rec)
+					}
+				}
+			}
+		}
+		return r, nil
+	}
+	// Fallback to JSON
+	return Open(jsonPath)
+}
+
+func upsertAgentDB(db *sql.DB, rec Record) error {
+	b, _ := json.Marshal(rec)
+	status := rec.Status
+	if strings.TrimSpace(status) == "" {
+		status = "offline"
+	}
+	var la, lh int64
+	if !rec.LastActivity.IsZero() {
+		la = rec.LastActivity.UnixMilli()
+	}
+	if !rec.LastHeartbeat.IsZero() {
+		lh = rec.LastHeartbeat.UnixMilli()
+	}
+	_, err := db.Exec(`INSERT INTO agents(agent_id, record_json, status, last_activity, last_heartbeat, updated_at)
+VALUES(?,?,?,?,?,?) ON CONFLICT(agent_id) DO UPDATE SET record_json=excluded.record_json, status=excluded.status, last_activity=excluded.last_activity, last_heartbeat=excluded.last_heartbeat, updated_at=excluded.updated_at`,
+		rec.AgentID, string(b), status, la, lh, time.Now().UnixMilli())
+	return err
 }
 
 func (r *Registry) Upsert(in Record) error {
@@ -245,6 +315,7 @@ func (r *Registry) ObserveModel(agentID, model, provider string, at time.Time) e
 	if !ok || strings.TrimSpace(model) == "" {
 		return nil
 	}
+	from := v.Model
 	if v.Model != model {
 		v.Changes = append(v.Changes, Change{At: at.UTC(), Field: "model", From: v.Model, To: model, Source: "event"})
 		v.Model = model
@@ -256,6 +327,15 @@ func (r *Registry) ObserveModel(agentID, model, provider string, at time.Time) e
 	}
 	v.LastActivity = at.UTC()
 	r.records[agentID] = v
+	// Persist model history to DB if present
+	if r.db != nil && from != model {
+		source := "event"
+		if v.ObservedProvider != "" {
+			source = "gateway-observed"
+		}
+		_, _ = r.db.Exec(`INSERT INTO model_history(agent_id, ts, from_model, to_model, source) VALUES(?,?,?,?,?)`,
+			agentID, at.UTC().UnixMilli(), from, model, source)
+	}
 	return r.saveLocked()
 }
 
@@ -392,6 +472,18 @@ func computeStatus(v Record, now time.Time) string {
 }
 
 func (r *Registry) saveLocked() error {
+	if r.db != nil {
+		// Persist all records to DB (single writer, map is already locked)
+		for _, rec := range r.records {
+			if err := upsertAgentDB(r.db, rec); err != nil {
+				return err
+			}
+		}
+		// Also keep JSON as backup if path set (audit)
+		if r.path == "" {
+			return nil
+		}
+	}
 	if r.path == "" {
 		return nil
 	}
@@ -440,6 +532,64 @@ func addChanges(in *Record, old Record, at time.Time, source string) {
 	if old.IP != in.IP {
 		in.Changes = append(in.Changes, Change{At: at, Field: "ip", From: old.IP, To: in.IP, Source: source})
 	}
+}
+
+// ModelHistory returns model change history for an agent, newest first.
+// It reads from DB if available, falling back to the in-memory Changes slice.
+func (r *Registry) ModelHistory(agentID string, limit int) ([]Change, error) {
+	if r.db != nil {
+		rows, err := r.db.Query(`SELECT ts, from_model, to_model, source FROM model_history WHERE agent_id=? ORDER BY ts DESC, id DESC LIMIT ?`, agentID, limit)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var out []Change
+		for rows.Next() {
+			var ts int64
+			var from, to, source string
+			if err := rows.Scan(&ts, &from, &to, &source); err != nil {
+				return nil, err
+			}
+			out = append(out, Change{At: time.UnixMilli(ts).UTC(), Field: "model", From: from, To: to, Source: source})
+		}
+		return out, rows.Err()
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	rec, ok := r.records[agentID]
+	if !ok {
+		return nil, nil
+	}
+	var out []Change
+	for i := len(rec.Changes) - 1; i >= 0; i-- {
+		if rec.Changes[i].Field == "model" {
+			out = append(out, rec.Changes[i])
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+// Delete removes an agent manually (offline agents are only removed this way).
+func (r *Registry) Delete(agentID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return fmt.Errorf("agent_id is required")
+	}
+	if _, ok := r.records[agentID]; !ok {
+		return fmt.Errorf("agent not found: %s", agentID)
+	}
+	delete(r.records, agentID)
+	if r.db != nil {
+		if _, err := r.db.Exec(`DELETE FROM agents WHERE agent_id=?`, agentID); err != nil {
+			return err
+		}
+	}
+	return r.saveLocked()
 }
 
 func RemoteIP(remote string) string {

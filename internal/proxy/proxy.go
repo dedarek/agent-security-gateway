@@ -1,7 +1,6 @@
 // Package proxy is the Gateway ingress. It intercepts tool calls, runs them
 // through the three-axis Risk Decision Engine, forwards ALLOW / denies BLOCK /
-// suspends CONFIRM / scrubs REDACT, records the trajectory, and emits a signed
-// action-receipt per decision.
+// suspends CONFIRM / scrubs REDACT, records the trajectory.
 package proxy
 
 import (
@@ -19,7 +18,6 @@ import (
 	"github.com/dedarek/agent-security-gateway/internal/kg"
 	"github.com/dedarek/agent-security-gateway/internal/kgbridge"
 	"github.com/dedarek/agent-security-gateway/internal/monitor"
-	"github.com/dedarek/agent-security-gateway/internal/receipt"
 	"github.com/dedarek/agent-security-gateway/internal/riskpattern"
 	"github.com/dedarek/agent-security-gateway/internal/session"
 )
@@ -40,14 +38,13 @@ type ResultObserver interface {
 	ObserveResult(sessionID, toolID string, output []byte)
 }
 
-// Gateway wires ingress -> decision engine -> approver -> forwarder -> audit + receipts.
+// Gateway wires ingress -> decision engine -> approver -> forwarder -> audit.
 type Gateway struct {
 	Registry   *engine.Registry
 	Approver   Approver
 	Forwarder  Forwarder
 	Audit      audit.Sink
 	Sessions   *session.Store
-	Receipts   *receipt.Emitter
 	Observers  []ResultObserver
 	PolicyHash string
 	Monitor    *monitor.Monitor
@@ -58,8 +55,7 @@ type Gateway struct {
 }
 
 // Handle runs one tool call through Pre -> (approve) -> Runtime -> Post and
-// returns the most-severe decision across phases. Exactly one signed receipt is
-// emitted per call, carrying the effective verdict.
+// returns the most-severe decision across phases.
 func (g *Gateway) Handle(ctx context.Context, c *api.ToolCall) (*api.ToolResult, api.Decision, error) {
 	if isolation := g.isolationDecision(c); isolation != nil {
 		g.record(c, nil, *isolation)
@@ -204,7 +200,7 @@ func moreSevere(a, b api.Decision) api.Decision {
 	return winner
 }
 
-// record emits the audit event, a signed receipt, and fans out to monitor/judge.
+// record emits the audit event and fans out to monitor/judge.
 func (g *Gateway) record(c *api.ToolCall, r *api.ToolResult, d api.Decision) {
 	ev := api.Event{
 		SessionID: c.Principal.SessionID,
@@ -216,11 +212,6 @@ func (g *Gateway) record(c *api.ToolCall, r *api.ToolResult, d api.Decision) {
 	if g.Audit != nil {
 		if err := g.Audit.Write(ev); err != nil {
 			log.Printf("audit write failed: %v", err)
-		}
-	}
-	if g.Receipts != nil {
-		if _, err := g.Receipts.Emit(g.toActionRecord(c, d)); err != nil {
-			log.Printf("receipt emit failed: %v", err)
 		}
 	}
 	if g.Monitor != nil {
@@ -264,26 +255,6 @@ func (g *Gateway) record(c *api.ToolCall, r *api.ToolResult, d api.Decision) {
 				_ = g.KGBridge.IndexEvents([]string{text}, []string{c.CallID})
 			}()
 		}
-	}
-}
-
-// toActionRecord maps a decision into Pipelock's ActionRecord taxonomy.
-func (g *Gateway) toActionRecord(c *api.ToolCall, d api.Decision) receipt.ActionRecord {
-	return receipt.ActionRecord{
-		ActionID:        c.CallID,
-		ActionType:      actionType(c.Action),
-		Timestamp:       time.Now().UTC(),
-		Principal:       c.Principal.UserID,
-		Actor:           c.Principal.AgentID,
-		DelegationChain: []string{c.Principal.UserID, c.Principal.AgentID},
-		Target:          c.ToolID,
-		SideEffectClass: sideEffect(c.Action),
-		Reversibility:   reversibility(c.Action),
-		PolicyHash:      g.PolicyHash,
-		Verdict:         d.Final.String(),
-		SessionID:       c.Principal.SessionID,
-		Transport:       "mcp",
-		Method:          c.ToolID,
 	}
 }
 

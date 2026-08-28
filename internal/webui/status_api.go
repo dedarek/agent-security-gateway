@@ -9,17 +9,16 @@ import (
 
 // statusProvider surfaces optional subsystem health for the frontend.
 type statusProvider struct {
-	kg      *kgbridge.Bridge
-	emitter receiptProvider
-	mon     monitorProvider
+	kg  *kgbridge.Bridge
+	mon monitorProvider
 }
 
 var statusSrc *statusProvider
 
 func (s *Server) SetStore(_ interface{}) {}
 
-func (s *Server) RegisterStatusAPI(mux *http.ServeMux, kg *kgbridge.Bridge, emitter receiptProvider, mon monitorProvider) {
-	statusSrc = &statusProvider{kg: kg, emitter: emitter, mon: mon}
+func (s *Server) RegisterStatusAPI(mux *http.ServeMux, kg *kgbridge.Bridge, mon monitorProvider) {
+	statusSrc = &statusProvider{kg: kg, mon: mon}
 	mux.HandleFunc("/api/status", s.Auth.middleware(s.apiStatus))
 }
 
@@ -37,16 +36,8 @@ func (s *Server) apiStatus(w http.ResponseWriter, _ *http.Request) {
 			kgInfo["error"] = err.Error()
 		}
 	}
-	receiptCount := 0
-	receiptVerified := false
-	if statusSrc != nil && statusSrc.emitter != nil {
-		rs := statusSrc.emitter.Receipts()
-		receiptCount = len(rs)
-		receiptVerified = true
-	}
 	writeJSON(w, map[string]any{
-		"kg":       kgInfo,
-		"receipts": map[string]any{"count": receiptCount, "verified": receiptVerified},
-		"time":     time.Now().UTC().Format(time.RFC3339),
+		"kg":   kgInfo,
+		"time": time.Now().UTC().Format(time.RFC3339),
 	})
 }

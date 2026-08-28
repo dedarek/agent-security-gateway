@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -34,6 +35,7 @@ import (
 	"github.com/dedarek/agent-security-gateway/internal/audit"
 	"github.com/dedarek/agent-security-gateway/internal/authn"
 	"github.com/dedarek/agent-security-gateway/internal/config"
+	"github.com/dedarek/agent-security-gateway/internal/db"
 	"github.com/dedarek/agent-security-gateway/internal/engine"
 	"github.com/dedarek/agent-security-gateway/internal/ingress"
 	"github.com/dedarek/agent-security-gateway/internal/judge"
@@ -43,7 +45,6 @@ import (
 	"github.com/dedarek/agent-security-gateway/internal/monitor"
 	"github.com/dedarek/agent-security-gateway/internal/policyhub"
 	"github.com/dedarek/agent-security-gateway/internal/proxy"
-	"github.com/dedarek/agent-security-gateway/internal/receipt"
 	"github.com/dedarek/agent-security-gateway/internal/registry"
 	"github.com/dedarek/agent-security-gateway/internal/rulesbundle"
 	"github.com/dedarek/agent-security-gateway/internal/session"
@@ -104,17 +105,52 @@ func serveCmd(args []string) {
 	}
 
 	// Event store + audit sink (JSONL on disk; UI reads it back).
-	evStore, err := store.Open(cfg.EventLogPath)
-	if err != nil {
-		log.Fatalf("event store: %v", err)
+	// If storage.driver == sqlite, open DB and use it as primary with JSONL as audit.
+	var evStore *store.Store
+	var dbHandle *sql.DB
+	if cfg.Storage.Driver == "sqlite" && cfg.Storage.DSN != "" {
+		db, err := db.Open(cfg.Storage.DSN)
+		if err != nil {
+			log.Fatalf("storage db: %v", err)
+		}
+		dbHandle = db
+		// Migrate legacy JSON if DB empty
+		if _, err := db.Exec(`SELECT 1`); err == nil {
+			// Migration is handled inside OpenWithDB helpers
+		}
+		jsonlPath := cfg.EventLogPath
+		if !cfg.Storage.AuditJSONL {
+			jsonlPath = ""
+		}
+		evStore, err = store.OpenWithDB(db, jsonlPath, cfg.Storage.MaxEvents)
+		if err != nil {
+			log.Fatalf("event store: %v", err)
+		}
+		log.Printf("[storage] sqlite primary at %s (max_events=%d, audit=%v)", cfg.Storage.DSN, cfg.Storage.MaxEvents, cfg.Storage.AuditJSONL)
+	} else {
+		var err error
+		evStore, err = store.Open(cfg.EventLogPath)
+		if err != nil {
+			log.Fatalf("event store: %v", err)
+		}
 	}
 	auditSink := audit.Sink(audit.StdoutSink{})
 	if evStore != nil {
 		auditSink = multiSink{audit.StdoutSink{}, evStore}
 	}
-	agentReg, err := agentregistry.Open("./data/agents.json")
-	if err != nil {
-		log.Fatalf("agent registry: %v", err)
+	var agentReg *agentregistry.Registry
+	if dbHandle != nil {
+		var err error
+		agentReg, err = agentregistry.OpenWithDB(dbHandle, "./data/agents.json")
+		if err != nil {
+			log.Fatalf("agent registry: %v", err)
+		}
+	} else {
+		var err error
+		agentReg, err = agentregistry.Open("./data/agents.json")
+		if err != nil {
+			log.Fatalf("agent registry: %v", err)
+		}
 	}
 
 	perm, err := engine.NewPermissionEngineFromFile(cfg.CedarPolicyPath)
@@ -135,14 +171,6 @@ func serveCmd(args []string) {
 	reg.Register(taint)
 	registerBehaviorSidecar(reg, store_, cfg)
 
-	emitter, err := receipt.OpenEmitter("./data/receipts.jsonl")
-	if err != nil {
-		log.Printf("[receipt] file emitter unavailable, using memory only: %v", err)
-		emitter, err = receipt.NewEmitter()
-		if err != nil {
-			log.Fatalf("receipt emitter: %v", err)
-		}
-	}
 	approvals := approval.NewManager(cfg.ApprovalTimeout)
 	hub := policyhub.New(cfg.CedarPolicyPath)
 
@@ -159,7 +187,6 @@ func serveCmd(args []string) {
 		Forwarder:  &liveForwarder{up: dialForServe(ctx, cfg)},
 		Audit:      auditSink,
 		Sessions:   store_,
-		Receipts:   emitter,
 		Observers:  []proxy.ResultObserver{taint},
 		PolicyHash: policyHash(cfg.CedarPolicyPath, cfg.RulesPath),
 		Monitor:    mon,
@@ -179,7 +206,11 @@ func serveCmd(args []string) {
 	}
 	uiSrv := webui.New(evStore, approvals, hub)
 	uiSrv.SetAgentRegistry(agentReg)
-	uiSrv.SetActivityStore(activity.New())
+	if dbHandle != nil {
+		uiSrv.SetActivityStore(activity.NewWithDB(dbHandle))
+	} else {
+		uiSrv.SetActivityStore(activity.New())
+	}
 	uiSrv.SetIngestAuth(func(header string) bool {
 		_, ok := authReg.Authenticate(header)
 		return ok
@@ -187,7 +218,6 @@ func serveCmd(args []string) {
 	// Agent onboarding and telemetry are keyless. Operator APIs retain cookie
 	// auth, while the central MCP ingress retains tenant authentication.
 	uiSrv.SetAgentIngressOpen(true)
-	uiSrv.SetEmitter(emitter)
 	uiSrv.SetJudge(judgeInst)
 	uiSrv.SetMonitor(mon)
 	uiSrv.SetStore(store_)
@@ -200,10 +230,9 @@ func serveCmd(args []string) {
 	uiMux.Handle("/mcp", uiSrv.WrapPublicMCP(publicMCP))
 	uiSrv.RegisterRegistryAPI(uiMux, mcpRegistry, &webui.TenantNames{Fn: authReg.Names})
 	uiSrv.Register(uiMux)
-	uiSrv.RegisterReceiptAPI(uiMux)
 	uiSrv.RegisterJudgeAPI(uiMux)
 	uiSrv.RegisterMonitorAPI(uiMux)
-	uiSrv.RegisterStatusAPI(uiMux, kgBridgeInst, emitter, mon)
+	uiSrv.RegisterStatusAPI(uiMux, kgBridgeInst, mon)
 	uiSrv.RegisterPolicyAPI(uiMux)
 	// OTLP/HTTP telemetry channel: OpenCode/Claude Code/Codex/OpenClaw/
 	// Hermes/Pi exporters push traces here. Visibility is decoupled from
@@ -341,26 +370,20 @@ func demoCmd() {
 	reg.Register(dn)
 	reg.Register(taint)
 
-	emitter, err := receipt.NewEmitter()
-	if err != nil {
-		log.Fatalf("receipt emitter: %v", err)
-	}
-
 	gw := &proxy.Gateway{
 		Registry:   reg,
 		Approver:   autoApprover{},
 		Forwarder:  up,
 		Audit:      audit.StdoutSink{},
 		Sessions:   store,
-		Receipts:   emitter,
 		Observers:  []proxy.ResultObserver{taint},
 		PolicyHash: policyHash(cfg.CedarPolicyPath, cfg.RulesPath),
 	}
 
-	demo(ctx, gw, emitter)
+	demo(ctx, gw)
 }
 
-func demo(ctx context.Context, gw *proxy.Gateway, emitter *receipt.Emitter) {
+func demo(ctx context.Context, gw *proxy.Gateway) {
 	employee := api.Principal{UserID: "alice", AgentID: "agent-1", SessionID: "s-perm", Role: "employee"}
 	line := func() { log.Printf("--------------------------------------------------") }
 
@@ -394,23 +417,7 @@ func demo(ctx context.Context, gw *proxy.Gateway, emitter *receipt.Emitter) {
 		Arguments: mustJSON(map[string]any{"to": "manager@corp.com", "body": "status update"})})
 	line()
 
-	log.Printf("### Audit — Pipelock-style signed action-receipt chain ###")
-	receipts := emitter.Receipts()
-	if err := receipt.VerifyChain(receipts, emitter.SignerKey()); err != nil {
-		log.Printf("  RECEIPT CHAIN INVALID: %v", err)
-	} else {
-		log.Printf("  %d receipts, chain VERIFIED (signer=%s...)", len(receipts), emitter.SignerKey()[:16])
-	}
-	for _, r := range receipts {
-		log.Printf("  receipt seq=%d action=%-8s verdict=%-7s target=%s",
-			r.ActionRecord.ChainSeq, r.ActionRecord.ActionType, r.ActionRecord.Verdict, r.ActionRecord.Target)
-	}
-	if len(receipts) > 0 {
-		if b, err := json.MarshalIndent(receipts[len(receipts)-1], "  ", "  "); err == nil {
-			_ = os.WriteFile("last-receipt.json", b, 0o644)
-			log.Printf("  wrote last-receipt.json")
-		}
-	}
+	log.Printf("### Demo complete — check /api/events for audit trail ###")
 }
 
 func run(ctx context.Context, gw *proxy.Gateway, c api.ToolCall) api.Decision {

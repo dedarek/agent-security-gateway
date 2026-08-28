@@ -10,6 +10,16 @@ import (
 
 // Config is the Gateway runtime configuration. It can be built programmatically
 // (Default) or loaded from a YAML file (Load).
+// StorageConfig controls the persistence layer.
+type StorageConfig struct {
+	Driver     string `yaml:"driver"`       // sqlite | jsonl
+	DSN        string `yaml:"dsn"`          // file path for sqlite, e.g. ./data/asg.db
+	MaxEvents  int    `yaml:"max_events"`   // keep at most N events, 0 = unlimited
+	AuditJSONL bool   `yaml:"audit_jsonl"`  // keep JSONL audit file alongside DB
+	AuditMaxMB int    `yaml:"audit_max_mb"` // rotate size
+	AuditKeep  int    `yaml:"audit_keep"`   // keep N rotated files
+}
+
 type Config struct {
 	Listen          string   `yaml:"listen"`
 	LLMUpstreamURL  string   `yaml:"llm_upstream_url"`
@@ -38,6 +48,9 @@ type Config struct {
 	ApprovalTimeout time.Duration `yaml:"approval_timeout"`
 	TenantsPath     string        `yaml:"tenants_path"`
 
+	// Storage: SQLite as primary, JSONL retained as audit原件 when enabled.
+	Storage StorageConfig `yaml:"storage"`
+
 	// Semantica KG bridge (optional; empty worker script = disabled).
 	KGPythonBin     string `yaml:"kg_python_bin"`
 	KGWorkerScript  string `yaml:"kg_worker_script"`
@@ -64,12 +77,20 @@ func Default() Config {
 		EventLogPath:             "./data/events.jsonl",
 		UIListen:                 ":8090",
 		ApprovalTimeout:          120 * time.Second,
+		Storage: StorageConfig{
+			Driver:       "sqlite",
+			DSN:          "./data/asg.db",
+			MaxEvents:    200000,
+			AuditJSONL:   true,
+			AuditMaxMB:   64,
+			AuditKeep:    5,
+		},
 		KGPythonBin:              "./.venv-kg/bin/python",
 		KGWorkerScript:           "internal/kgbridge/asg_kg_worker.py",
 		KGSemanticaPath:          "", // set to semantica checkout if used
 		KGPort:                   8902,
 		ExplorerURL:              "http://127.0.0.1:8091",
-		ExplorerAPIKey:           "asg-explorer-key",
+		ExplorerAPIKey:           "asg-e...ey",
 	}
 }
 

@@ -33,7 +33,9 @@ intelligence/.venv/
 bin/
 connect-events.jsonl*
 data/
-data/events.jsonl
+data/*.db
+data/*.db-*
+!data/.gitkeep
 connect-events.jsonl*
 *.queue
 demo/
