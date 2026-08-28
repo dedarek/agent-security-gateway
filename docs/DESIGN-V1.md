@@ -273,7 +273,7 @@ exit 0
 2. **观察路径永远 `exit 0`** —— 上报失败绝不能弄坏用户的 agent。
 3. **有界超时** —— 2 秒，绝不挂起 hook。
 
-> **注**：M3 的 `PreToolUse` 拦截路径是**唯一**允许非零退出的场景，届时使用**独立脚本** `~/.asg/asg-guard`，与观察脚本严格分离，避免观察路径的任何故障演变成拦截误伤。
+> **注**：M3 的 `PreToolUse` 拦截路径使用**独立同步脚本** `~/.asg/asg-guard`（`async` 不设或为 `false`），通过向 **stdout 输出 `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"..."}}`** 来阻断；`退出码 2 + stderr` 为兼容旧版的备选路径。与观察脚本 `~/.asg/asg-report`（`async:true`，仅异步观察上报，不参与权限决策）严格分离，避免观察路径的任何故障演变成拦截误伤。**`async:true` 的 hook 按官方定义 runs in the background without blocking，永远无法参与权限决策。**
 
 **幂等**：注入前检查 `hooks.*[].hooks[].command` 是否已含 `asg-report`；有则跳过。
 **备份**：`~/.claude/settings.json.asg-backup-<unix-ts>`。
@@ -330,7 +330,7 @@ X-ASG-Key: <tenant_key>
 ```json
 {"status":"ok","verdict":"ALLOW"}
 ```
-M3 起若判定 BLOCK，返回 `{"status":"ok","verdict":"BLOCK","code":"...","message":"..."}`，由 `PreToolUse` hook 依据退出码阻断（Claude Code 规范：hook 非零退出可阻止工具执行）。
+M3 起若判定 BLOCK，返回 `{"status":"ok","verdict":"BLOCK","code":"...","message":"..."}`，由 `PreToolUse` **同步** hook 向 **stdout 输出 `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"[ASG <code>] <message>"}}`** 来阻断（Claude Code 官方推荐契约，`退出码 2 + stderr` 为兼容旧版备选）。`async:true` 的 hook 仅用于异步观察上报，不参与权限决策。
 
 ### 2.8 在线三态（修改 `internal/agentregistry/registry.go`）
 
@@ -761,7 +761,7 @@ Agent 侧收到的结构化错误：
 **分通道呈现**：
 - LLM 路径（Proxy）：HTTP 403 + 上述 JSON body
 - MCP 路径：MCP error response，`code = -32001`，`data` 放上述结构
-- Hook 路径（`PreToolUse`）：脚本以**非零退出码**返回，stderr 打印 `message`（Claude Code 据此阻断工具）
+- Hook 路径（`PreToolUse`）：**同步**脚本 `~/.asg/asg-guard`（`async` 不设或为 `false`）向 **stdout 输出 `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"..."}}`** 来阻断（`退出码 2 + stderr` 为兼容旧版备选）；**仅同步 hook 能参与权限决策，`async:true` 的 hook 仅用于异步观察上报，不参与决策**
 
 ### 4.6 M3 验收（红队用例）
 
@@ -937,7 +937,7 @@ providers:                     # Proxy 通道（可选）
 
 | 场景 | 通道 | 可见性 | 管控力度 | 备注 |
 |---|---|---|---|---|
-| Mac + Claude Code + cc-switch | Hook | 工具链路、会话、活动 | Hook 可阻断工具（PreToolUse 非零退出） | 模型 = self-reported；**零 sudo / 零二进制 / 零常驻进程** |
+| Mac + Claude Code + cc-switch | Hook | 工具链路、会话、活动 | Hook 可阻断工具（PreToolUse 同步 hook 输出 `permissionDecision:"deny"`） | 模型 = self-reported；**零 sudo / 零二进制 / 零常驻进程** |
 | 本机 + OpenCode | Hook + OTLP | 链路 + token/cost | 同上 | 模型 = self-reported（OTLP span） |
 | 自研 agent 愿改 base_url | Proxy | **全量请求/响应** | **三轴全生效** | 模型 = gateway-observed ✅；探针装 `~/.asg/bin/`，仍不需 sudo |
 | 通过 `/mcp` 的工具调用 | MCP | 工具参数与结果 | 三轴全生效 | 现状已支持 |

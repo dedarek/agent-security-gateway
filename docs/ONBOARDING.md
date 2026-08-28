@@ -187,6 +187,8 @@ PYEOF
 **预期**：三行 `installed` + `settings.json updated`。
 **重复执行安全**：再跑一次会显示 `already installed, skip`。
 
+> **拦截契约说明（M3 起）**：本页第 6 步注入的 `PostToolUse` / `SessionStart` / `Stop` 均为 **`async:true` 异步观察钩子，仅用于上报，不参与权限决策**（官方定义 `async:true` runs in the background without blocking，永远无法阻断）。如需拦截，需另配 `PreToolUse` **同步**钩子 `~/.asg/asg-guard`（`async` 不设或为 `false`），通过向 stdout 输出 `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"..."}}` 来阻断；`退出码 2 + stderr` 为兼容旧版备选。
+
 ---
 
 ## 第 7 步：自检（请回报本步输出）
