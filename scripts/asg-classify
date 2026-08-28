@@ -1,0 +1,46 @@
+#!/bin/sh
+# asg-classify — pure POSIX sh L0/L1/L2 risk classifier
+# Usage: . ./scripts/asg-classify; asg_classify <tool_name> <payload_json> -> L0|L1|L2
+# Monotonic escalation only: only upgrades, never downgrades. Fail -> L1.
+# Target <5ms, no python, no subprocess.
+
+asg_classify() {
+  _tool="$1"
+  _pl="$2"
+
+  # L0: read-only tools, never blocked, never waited on
+  case "$_tool" in
+    Read|Grep|Glob|LS|TodoWrite|NotebookRead|Task)
+      echo L0
+      return
+      ;;
+  esac
+
+  # L2 by tool: inherently side-effecting or egress-capable
+  case "$_tool" in
+    Bash|WebFetch|WebSearch)
+      echo L2
+      return
+      ;;
+  esac
+
+  # L2 by sensitive path
+  case "$_pl" in
+    *.ssh/*|*.aws/*|*.kube/*|*credentials*|*id_rsa*|*.env*|*.pem*|*.p12*|*secrets*|*.netrc*)
+      echo L2
+      return
+      ;;
+  esac
+
+  # L2 by dangerous command pattern (covers Write-a-script cases)
+  # matches: curl/wget/ nc /base64/scp/ ssh /| sh/|sh /*/dev/tcp/chmod +x
+  case "$_pl" in
+    *curl*|*wget*|*\ nc\ *|*base64*|*scp*|*\ ssh\ *|*\|\ sh*|*\|\sh\ *|*/dev/tcp*|*chmod\ +x*)
+      echo L2
+      return
+      ;;
+  esac
+
+  # default: ordinary write
+  echo L1
+}
