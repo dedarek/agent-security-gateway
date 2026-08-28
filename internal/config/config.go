@@ -60,6 +60,8 @@ type Config struct {
 	KGWorkerScript  string `yaml:"kg_worker_script"`
 	KGSemanticaPath string `yaml:"kg_semantica_path"`
 	KGPort          int    `yaml:"kg_port"`
+	// How often to probe the worker graph and re-ingest if it came back empty.
+	KGSelfHealInterval time.Duration `yaml:"kg_self_heal_interval"`
 
 	// Semantica Explorer (interactive graph visualization), proxied into the
 	// console at /explorer/. Empty URL = link out instead of embed.
@@ -97,6 +99,7 @@ func Default() Config {
 		KGWorkerScript:           "internal/kgbridge/asg_kg_worker.py",
 		KGSemanticaPath:          "", // set to semantica checkout if used
 		KGPort:                   8902,
+		KGSelfHealInterval:       30 * time.Second,
 		ExplorerURL:              "http://127.0.0.1:8091",
 		ExplorerAPIKey:           "asg-e...ey",
 	}

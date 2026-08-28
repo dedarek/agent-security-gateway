@@ -262,9 +262,31 @@ func serveCmd(args []string) {
 	if err := kgBridgeInst.Start(); err != nil {
 		log.Printf("[kg] semantica worker not started: %v", err)
 	} else {
-		replayKG(evStore, kgBuilder, kgBridgeInst)
+		// One reusable replay closure: startup seeding AND the self-heal path
+		// both go through it, so the two can never drift apart.
+		replay := func() error {
+			return replayKG(evStore, kgBuilder, kgBridgeInst)
+		}
+		localEvents := func() int {
+			if evStore == nil {
+				return 0
+			}
+			return len(evStore.Recent(10000))
+		}
+		if err := replay(); err != nil {
+			log.Printf("[kg] initial replay failed: %v", err)
+		}
 		uiSrv.RegisterKGAPI(uiMux, kgBridgeInst)
-		log.Printf("[kg] semantica worker on :8902")
+		// Self-heal: if the worker is restarted out from under us its graph is
+		// empty (pure in-memory). Re-ingest instead of staying blank forever.
+		stopHeal := kgBridgeInst.StartSelfHeal(cfg.KGSelfHealInterval, replay, localEvents)
+		defer stopHeal()
+		if st, err := kgBridgeInst.GraphStats(); err == nil {
+			log.Printf("[kg] semantica worker on :%d graph_ready=%v node_count=%d edge_count=%d",
+				cfg.KGPort, st.GraphReady, st.NodeCount, st.EdgeCount)
+		} else {
+			log.Printf("[kg] semantica worker on :%d (stats unavailable: %v)", cfg.KGPort, err)
+		}
 	}
 	go func() {
 		uiAddr := cfg.UIListen
@@ -282,9 +304,9 @@ func serveCmd(args []string) {
 	}
 }
 
-func replayKG(st *store.Store, builder *kg.Builder, bridge *kgbridge.Bridge) {
+func replayKG(st *store.Store, builder *kg.Builder, bridge *kgbridge.Bridge) error {
 	if st == nil || builder == nil || bridge == nil {
-		return
+		return nil
 	}
 	events := st.Recent(10000)
 	var texts, ids []string
@@ -294,17 +316,23 @@ func replayKG(st *store.Store, builder *kg.Builder, bridge *kgbridge.Bridge) {
 		ids = append(ids, ev.Call.CallID)
 	}
 	ents, rels := builder.Export()
+	var firstErr error
 	if len(ents) > 0 || len(rels) > 0 {
 		if err := bridge.Ingest(ents, rels); err != nil {
 			log.Printf("[kg] replay graph failed: %v", err)
+			firstErr = err
 		}
 	}
 	if len(texts) > 0 {
 		if err := bridge.IndexEvents(texts, ids); err != nil {
 			log.Printf("[kg] replay event index failed: %v", err)
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
 	log.Printf("[kg] replayed %d events into graph", len(events))
+	return firstErr
 }
 
 // multiSink fans audit events out to several sinks.

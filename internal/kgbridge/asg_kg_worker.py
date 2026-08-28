@@ -21,10 +21,12 @@ import json
 import os
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 KG_ENTITIES = []
 KG_RELATIONSHIPS = []
+LAST_INGEST_AT = None
 
 EMBEDDER = None
 LLM = None
@@ -64,6 +66,7 @@ def _init_semantica(semantica_path):
 def _ingest(payload):
     ents = payload.get("entities") or []
     rels = payload.get("relationships") or []
+    global LAST_INGEST_AT
     for e in ents:
         if e not in KG_ENTITIES:
             KG_ENTITIES.append(e)
@@ -89,7 +92,46 @@ def _ingest(payload):
             )
         GRAPH_SESSION.rebuild_search_index()
 
+    LAST_INGEST_AT = int(time.time())
     return {"entities": len(KG_ENTITIES), "relationships": len(KG_RELATIONSHIPS)}
+
+
+def _graph_counts():
+    """Honest counters: how much data the graph ACTUALLY holds right now."""
+    nodes = 0
+    edges = 0
+    if GRAPH_SESSION:
+        try:
+            _, nodes, _ = GRAPH_SESSION.paginate_nodes(limit=1)
+            _, edges, _ = GRAPH_SESSION.paginate_edges(limit=1)
+        except Exception:
+            nodes, edges = 0, 0
+    # Fall back to the in-memory mirror when the session is unavailable.
+    nodes = nodes or len(KG_ENTITIES)
+    edges = edges or len(KG_RELATIONSHIPS)
+    return int(nodes), int(edges)
+
+
+def _health():
+    """status = process liveness. graph_ready = graph really has data.
+
+    These are deliberately separate: a live worker with an empty graph must
+    NOT report graph_ready=true (that is how a restart used to look green
+    while /api/kg/graph/nodes returned an empty list)."""
+    nodes, edges = _graph_counts()
+    return {
+        "status": "ok",
+        "pid": os.getpid(),
+        "worker_token": WORKER_TOKEN,
+        "worker_version": "asg-kg-2",
+        "entities": len(KG_ENTITIES),
+        "indexed": len(INDEX_TEXTS),
+        "node_count": nodes,
+        "edge_count": edges,
+        "ingested_at": LAST_INGEST_AT,
+        "graph_session": GRAPH_SESSION is not None,
+        "graph_ready": (nodes > 0 or edges > 0),
+    }
 
 
 def _index_events(payload):
@@ -225,12 +267,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.startswith("/health"):
-            self._json(200, {"status": "ok", "pid": os.getpid(),
-                             "worker_token": WORKER_TOKEN,
-                             "worker_version": "asg-kg-1",
-                             "entities": len(KG_ENTITIES),
-                             "indexed": len(INDEX_TEXTS),
-                             "graph_ready": GRAPH_SESSION is not None})
+            self._json(200, _health())
         elif self.path == "/graph/nodes":
             self._json(200, _graph_nodes())
         elif self.path == "/graph/edges":

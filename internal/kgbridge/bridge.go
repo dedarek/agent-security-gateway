@@ -22,6 +22,9 @@ type Bridge struct {
 	pythonBin     string
 	semanticaPath string
 	workerScript  string
+
+	lastStats GraphStats
+	haveStats bool
 }
 
 func New(pythonBin, workerScript, semanticaPath string, port int) *Bridge {
@@ -39,8 +42,11 @@ func (b *Bridge) Start() error {
 	// A worker may have been started independently (for example by the local
 	// cluster script). Reuse it when it is healthy instead of launching a
 	// second process on the same port and then losing the KG API registration.
+	// Liveness (status:ok) — NOT graph_ready. graph_ready now honestly means
+	// "the graph actually holds data", which a freshly restarted worker never
+	// does; treating it as liveness would spawn a duplicate on the same port.
 	if health, err := b.Health(); err == nil {
-		if ready, ok := health["graph_ready"].(bool); ok && ready {
+		if status, ok := health["status"].(string); ok && status == "ok" {
 			return nil
 		}
 	}
@@ -66,8 +72,8 @@ func (b *Bridge) Start() error {
 		}
 		if health, err := b.Health(); err == nil {
 			workerToken, tokenOK := health["worker_token"].(string)
-			ready, readyOK := health["graph_ready"].(bool)
-			if tokenOK && workerToken == startupToken && readyOK && ready {
+			status, statusOK := health["status"].(string)
+			if tokenOK && workerToken == startupToken && statusOK && status == "ok" {
 				return nil
 			}
 		}
