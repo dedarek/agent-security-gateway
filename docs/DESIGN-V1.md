@@ -9,6 +9,8 @@
 
 - [1. 现有契约（不可随意改动的基础）](#1-现有契约)
 - [2. M1 接入闭环](#2-m1-接入闭环)
+  - [2.4 部署形态决断（零二进制/零 sudo/零常驻）](#24-部署形态决断零二进制--零-sudo--零常驻进程)
+  - [2.9 **远端 Agent 接入完整方案（交付文案）**](#29-远端-agent-接入完整方案交付文案)
 - [3. M2 存储与显示](#3-m2-存储与显示)
 - [4. M3 管控落地](#4-m3-管控落地核心)
 - [5. M4 控制台重构](#5-m4-控制台重构)
@@ -160,7 +162,26 @@ type InstallConfig struct {
 }
 ```
 
-### 2.4 Claude Code 适配（`harness/claudecode.go`）
+### 2.4 部署形态决断（零二进制 / 零 sudo / 零常驻进程）
+
+**定案**：Hook 通道**不下载任何二进制、不需要 sudo、不写系统目录、不留常驻进程**。
+
+| 项 | 决断 |
+|---|---|
+| 安装位置 | `~/.asg/`（用户家目录，无权限问题） |
+| 安装内容 | 1 个 POSIX sh 脚本 `~/.asg/asg-report` + 1 个配置 `~/.asg/config` |
+| 依赖 | 只需 `sh` + `curl`（macOS/Linux 自带） |
+| 常驻进程 | **无**。脚本由 harness 在事件发生时 fork，执行完即退出 |
+| sudo | **不需要** |
+| 触碰 shell 配置 | **不触碰**（不改 `.zshrc` / `.bashrc` / `.profile`） |
+| 触碰环境变量 | **不设置任何全局环境变量**（这是两次污染事故的根源） |
+| 唯一被修改的文件 | harness 自己的配置文件（如 `~/.claude/settings.json`），且**合并写入 + 自动备份** |
+
+**探针二进制（`asg-connect`）仅在用户自愿启用 Proxy 通道时才需要**，且同样装在 `~/.asg/bin/`，不进 `/usr/local/bin`，不需要 sudo。Hook 通道**完全不需要它**。
+
+**安装流程无需编译、无需下载可执行文件**：`~/.asg/asg-report` 由一条 `cat > ... <<'EOF'` 命令直接写出，全文可读、可审计。
+
+### 2.5 Claude Code 适配（`harness/claudecode.go`）
 
 **配置文件**：`~/.claude/settings.json`
 **规范出处**：`https://code.claude.com/docs/en/hooks`
@@ -175,7 +196,7 @@ type InstallConfig struct {
       "hooks": [{
         "type": "command",
         "async": true,
-        "command": "ASG_EVENT=session_start /usr/local/bin/asg-report"
+        "command": "ASG_EVENT=session_start $HOME/.asg/asg-report"
       }]
     }],
     "PostToolUse": [{
@@ -183,7 +204,7 @@ type InstallConfig struct {
       "hooks": [{
         "type": "command",
         "async": true,
-        "command": "/usr/local/bin/asg-report"
+        "command": "$HOME/.asg/asg-report"
       }]
     }],
     "Stop": [{
@@ -191,51 +212,80 @@ type InstallConfig struct {
       "hooks": [{
         "type": "command",
         "async": true,
-        "command": "ASG_EVENT=session_end /usr/local/bin/asg-report"
+        "command": "ASG_EVENT=session_end $HOME/.asg/asg-report"
       }]
     }]
   }
 }
 ```
 
-**为什么用独立脚本 `asg-report` 而不是内联 curl**：
+> 若某 harness 不展开 `$HOME`，安装时写入解析后的绝对路径（`/Users/<u>/.asg/asg-report`）。`harness.Install()` 负责判定。
+
+**为什么用独立脚本而不是内联 curl**：
 1. 内联 curl 要在 JSON 里三层转义引号，极易写坏（本轮已踩坑）。
 2. 脚本可读 stdin 的 hook payload（Claude Code 通过 stdin 传 JSON，含 `tool_name` / `tool_input` / `session_id`）。
 3. 升级上报逻辑不用改 harness 配置。
+4. 脚本自带配置，**不依赖任何环境变量** → 彻底杜绝 tty 污染。
 
-**`asg-report` 脚本内容**（安装时写入，`chmod +x`）：
+**`~/.asg/config`**（安装时生成，`chmod 600`）：
+
+```sh
+ASG_HUB="https://asg-gateway.vip.cpolar.cn"
+ASG_AGENT_ID="fe173f09-claude-code"
+ASG_TENANT_KEY="<REDACTED>"
+ASG_HARNESS="claude-code"
+ASG_DETAIL="tool"          # minimal | tool | full
+ASG_SAMPLE="1.0"
+```
+
+**`~/.asg/asg-report`**（安装时生成，`chmod 700`）：
 
 ```sh
 #!/bin/sh
-# ASG activity reporter. Reads hook payload from stdin, posts to hub.
-# Never blocks the harness: backgrounded, output discarded, 2s timeout.
+# ASG activity reporter — POSIX sh, no binary, no daemon, no sudo.
+# Invoked by the harness hook; forks, reports, exits. Never blocks the TUI.
+#
+# HARD RULES (violating any of these caused prior incidents):
+#   1. Write NOTHING to stdout/stderr — the harness TUI (Ink) owns the tty.
+#   2. Always exit 0 on the observe path — never break the user's agent.
+#   3. Bounded timeout — never hang the hook.
+[ -r "$HOME/.asg/config" ] || exit 0
+. "$HOME/.asg/config"
+
 PAYLOAD=$(cat 2>/dev/null)
-{
-  curl -sS --max-time 2 -X POST "$ASG_HUB/api/activity" \
-    -H 'Content-Type: application/json' \
-    -H "X-ASG-Agent-Id: $ASG_AGENT_ID" \
-    -H "X-ASG-Key: $ASG_TENANT_KEY" \
-    --data-binary @- <<JSON
-{"agent_id":"$ASG_AGENT_ID","agent_type":"$ASG_HARNESS",
- "event":"${ASG_EVENT:-tool_use}","hook_payload":$PAYLOAD}
-JSON
-} >/dev/null 2>&1 &
+[ -n "$PAYLOAD" ] || PAYLOAD='{}'
+
+(
+  printf '{"agent_id":"%s","agent_type":"%s","event":"%s","detail":"%s","hook_payload":%s}' \
+    "$ASG_AGENT_ID" "$ASG_HARNESS" "${ASG_EVENT:-tool_use}" "$ASG_DETAIL" "$PAYLOAD" \
+  | curl -sS --max-time 2 -X POST "$ASG_HUB/api/activity" \
+      -H 'Content-Type: application/json' \
+      -H "X-ASG-Agent-Id: $ASG_AGENT_ID" \
+      -H "X-ASG-Key: $ASG_TENANT_KEY" \
+      --data-binary @-
+) >/dev/null 2>&1 &
+
 exit 0
 ```
 
-配置常量（`ASG_HUB` 等）由安装时写入脚本头部，不依赖用户 shell 环境 —— **这是关键**：不碰 `.zshrc`，就不会有环境变量污染。
+**三条硬规则写进脚本注释**，因为违反其中任何一条都直接导致过事故：
+1. **不向 stdout/stderr 写任何东西** —— tty 归 harness 的 Ink 渲染器所有（这就是 OTEL 污染的同类根因）。
+2. **观察路径永远 `exit 0`** —— 上报失败绝不能弄坏用户的 agent。
+3. **有界超时** —— 2 秒，绝不挂起 hook。
 
-**幂等**：注入前先检查 `hooks.PostToolUse[].hooks[].command` 是否已含 `asg-report`；有则跳过。
+> **注**：M3 的 `PreToolUse` 拦截路径是**唯一**允许非零退出的场景，届时使用**独立脚本** `~/.asg/asg-guard`，与观察脚本严格分离，避免观察路径的任何故障演变成拦截误伤。
+
+**幂等**：注入前检查 `hooks.*[].hooks[].command` 是否已含 `asg-report`；有则跳过。
 **备份**：`~/.claude/settings.json.asg-backup-<unix-ts>`。
-**回滚**：`asg-connect uninstall` 优先还原最新备份；备份缺失则从 JSON 中精确删除含 `asg-report` 的 hook 项。
+**回滚**：`asg-connect uninstall` 优先还原最新备份；备份缺失则从 JSON 中精确删除含 `.asg/asg-report` 的 hook 项，并删除 `~/.asg/`。
 
-### 2.5 OpenCode 适配（`harness/opencode.go`）
+### 2.6 OpenCode 适配（`harness/opencode.go`）
 
 **配置文件**：`~/.config/opencode/opencode.jsonc`
 **方式**：`plugin` 数组追加 `@devtheops/opencode-plugin-otel`（本机已验证可用），并写 `experimental.openTelemetry: true`。
 **差异**：OpenCode 的 OTLP 实现稳定，可直接走通道 3，拿到 span 属性里的模型真值。
 
-### 2.6 `/api/activity` 契约（扩展现有端点）
+### 2.7 `/api/activity` 契约（扩展现有端点）
 
 **请求**：
 ```
@@ -282,7 +332,7 @@ X-ASG-Key: <tenant_key>
 ```
 M3 起若判定 BLOCK，返回 `{"status":"ok","verdict":"BLOCK","code":"...","message":"..."}`，由 `PreToolUse` hook 依据退出码阻断（Claude Code 规范：hook 非零退出可阻止工具执行）。
 
-### 2.7 在线三态（修改 `internal/agentregistry/registry.go`）
+### 2.8 在线三态（修改 `internal/agentregistry/registry.go`）
 
 ```go
 const (
@@ -301,30 +351,221 @@ func computeStatus(r Record, now time.Time) string {
 UI 两个指示灯：**活动灯**（active 绿 / 否则灰）+ **进程灯**（心跳在窗内绿 / 否则灰）。
 offline 记录**永不自动删除**，仅 `DELETE /api/agents/{id}` 手动移除。
 
-### 2.8 分步接入命令（交付给远端 agent 的文案）
+### 2.9 远端 Agent 接入完整方案（交付文案）
+
+> 本节是**直接发给远端 agent 的原文**。设计目标：agent 自己读、自己执行、自己验证、出错自己回滚，全程无需人工介入，无需 sudo，无需下载二进制，不触碰 shell 配置与环境变量。
+
+#### 2.9.1 前置检查（只读，不改任何东西）
 
 ```bash
-# 步骤 1：下载探针（单文件，无依赖）
-curl -fsSL https://asg-gateway.vip.cpolar.cn/dist/asg-connect-darwin-arm64 -o /tmp/asg-connect
-chmod +x /tmp/asg-connect && sudo mv /tmp/asg-connect /usr/local/bin/asg-connect
+# 确认依赖齐全（macOS/Linux 自带，通常无需安装）
+command -v sh && command -v curl && echo "deps ok"
 
-# 步骤 2：查看本机检测到哪些 agent 工具（只读，不改任何东西）
-asg-connect detect
+# 确认能连通网关
+curl -sS --max-time 5 https://asg-gateway.vip.cpolar.cn/healthz && echo " hub ok"
 
-# 步骤 3：接入（自动备份原配置；--dry-run 可先看将要写入什么）
-asg-connect init --hub https://asg-gateway.vip.cpolar.cn --key <TENANT_KEY> --dry-run
-asg-connect init --hub https://asg-gateway.vip.cpolar.cn --key <TENANT_KEY>
-
-# 步骤 4：自检（确认注册成功 + 配置写对）
-asg-connect verify
-
-# 如需回滚
-asg-connect uninstall
+# 看看本机有哪些 agent 工具（只读）
+ls -d ~/.claude 2>/dev/null && echo "claude-code detected"
+ls -d ~/.config/opencode 2>/dev/null && echo "opencode detected"
+ls -d ~/.codex 2>/dev/null && echo "codex detected"
 ```
 
-**注意**：步骤 3 之后**不需要重启 shell、不需要 source 任何文件**。Claude Code 下次启动时读取 `settings.json` 即生效。
+#### 2.9.2 生成机器标识
 
-### 2.9 M1 验收脚本
+```bash
+# macOS
+ASG_MACHINE=$(ioreg -rd1 -c IOPlatformExpertDevice \
+  | awk -F'"' '/IOPlatformUUID/{print $4}' | cut -c1-8 | tr 'A-Z' 'a-z')
+# Linux 备选
+[ -z "$ASG_MACHINE" ] && ASG_MACHINE=$(cat /etc/machine-id 2>/dev/null | cut -c1-8)
+
+echo "machine id: $ASG_MACHINE"
+```
+
+`agent_id` 规则：`<machine-id 前8位>-<harness 名>`，例如 `fe173f09-claude-code`。
+**一机多 harness 各自成行**（用户明确要求）：同机再装 OpenCode 就是 `fe173f09-opencode`，独立一行、独立策略。
+
+#### 2.9.3 创建 ASG 目录与配置
+
+```bash
+mkdir -p ~/.asg
+
+cat > ~/.asg/config <<EOF
+ASG_HUB="https://asg-gateway.vip.cpolar.cn"
+ASG_AGENT_ID="${ASG_MACHINE}-claude-code"
+ASG_TENANT_KEY="<TENANT_KEY>"
+ASG_HARNESS="claude-code"
+ASG_DETAIL="tool"
+ASG_SAMPLE="1.0"
+EOF
+chmod 600 ~/.asg/config
+```
+
+#### 2.9.4 写入上报脚本
+
+```bash
+cat > ~/.asg/asg-report <<'EOF'
+#!/bin/sh
+# ASG activity reporter — POSIX sh, no binary, no daemon, no sudo.
+# HARD RULES:
+#   1. Write NOTHING to stdout/stderr — the harness TUI owns the tty.
+#   2. Always exit 0 — reporting must never break the user's agent.
+#   3. Bounded timeout — never hang the hook.
+[ -r "$HOME/.asg/config" ] || exit 0
+. "$HOME/.asg/config"
+
+PAYLOAD=$(cat 2>/dev/null)
+[ -n "$PAYLOAD" ] || PAYLOAD='{}'
+
+(
+  printf '{"agent_id":"%s","agent_type":"%s","event":"%s","detail":"%s","hook_payload":%s}' \
+    "$ASG_AGENT_ID" "$ASG_HARNESS" "${ASG_EVENT:-tool_use}" "$ASG_DETAIL" "$PAYLOAD" \
+  | curl -sS --max-time 2 -X POST "$ASG_HUB/api/activity" \
+      -H 'Content-Type: application/json' \
+      -H "X-ASG-Agent-Id: $ASG_AGENT_ID" \
+      -H "X-ASG-Key: $ASG_TENANT_KEY" \
+      --data-binary @-
+) >/dev/null 2>&1 &
+
+exit 0
+EOF
+chmod 700 ~/.asg/asg-report
+```
+
+#### 2.9.5 注册到网关
+
+```bash
+. ~/.asg/config
+curl -sS --max-time 10 -X POST "$ASG_HUB/api/agents/register" \
+  -H 'Content-Type: application/json' \
+  -H "X-ASG-Key: $ASG_TENANT_KEY" \
+  -d "{\"agent_id\":\"$ASG_AGENT_ID\",\"agent_type\":\"$ASG_HARNESS\",
+       \"machine_id\":\"$ASG_MACHINE\",\"machine_name\":\"$(hostname)\",
+       \"os\":\"$(uname -s)\",\"user\":\"$(whoami)\"}"
+```
+
+#### 2.9.6 备份并注入 Hook（**关键步骤，务必先备份**）
+
+```bash
+# 备份（存在才备份）
+[ -f ~/.claude/settings.json ] && \
+  cp ~/.claude/settings.json ~/.claude/settings.json.asg-backup-$(date +%s) && \
+  echo "backed up"
+
+mkdir -p ~/.claude
+[ -f ~/.claude/settings.json ] || echo '{}' > ~/.claude/settings.json
+```
+
+**合并写入 hooks（用 python3 做 JSON 合并，绝不整文件覆盖）**：
+
+```bash
+python3 - <<'PYEOF'
+import json, os, pathlib
+
+p = pathlib.Path.home() / ".claude" / "settings.json"
+cfg = json.loads(p.read_text() or "{}")
+script = str(pathlib.Path.home() / ".asg" / "asg-report")
+
+def entry(event=None):
+    cmd = script if event is None else f"ASG_EVENT={event} {script}"
+    return {"matcher": "*", "hooks": [{"type": "command", "async": True, "command": cmd}]}
+
+hooks = cfg.setdefault("hooks", {})
+plan = {"PostToolUse": None, "SessionStart": "session_start", "Stop": "session_end"}
+
+for name, ev in plan.items():
+    arr = hooks.setdefault(name, [])
+    # 幂等：已存在 ASG hook 则跳过
+    if any("asg-report" in h.get("command", "")
+           for grp in arr for h in grp.get("hooks", [])):
+        print(f"{name}: already installed, skip")
+        continue
+    arr.append(entry(ev))
+    print(f"{name}: installed")
+
+p.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+print("settings.json updated")
+PYEOF
+```
+
+> **为什么必须用 JSON 合并而不是覆盖**：远端 `~/.claude/settings.json` 可能承载模型路由代理配置（`ANTHROPIC_BASE_URL` 指向本地代理）与凭证。整文件覆盖会让 Claude Code 直接不可用 —— 本项目已发生过一次该事故。
+
+#### 2.9.7 自检
+
+```bash
+# 1. 脚本可执行且静默（不得有任何输出）
+echo '{"tool_name":"SelfTest"}' | ~/.asg/asg-report && echo "script ok (silent)"
+
+# 2. hooks 写入正确
+python3 -c "
+import json,pathlib
+h=json.loads((pathlib.Path.home()/'.claude/settings.json').read_text()).get('hooks',{})
+for k,v in h.items():
+    for g in v:
+        for x in g.get('hooks',[]):
+            if 'asg-report' in x.get('command',''): print('OK', k)
+"
+
+# 3. 网关侧已可见（等 3 秒让异步上报到达）
+sleep 3
+. ~/.asg/config
+curl -sS "$ASG_HUB/api/agents" | grep -o "\"agent_id\":\"$ASG_AGENT_ID\"[^}]*" | head -c 400
+```
+
+**接入完成。此后正常使用 Claude Code 即可，无需重启 shell、无需 source 任何文件、无需常驻进程。**
+Claude Code 下次启动时读取 `settings.json` 生效。
+
+#### 2.9.8 回滚（一条命令还原）
+
+```bash
+# 优先从备份还原
+LATEST=$(ls -t ~/.claude/settings.json.asg-backup-* 2>/dev/null | head -1)
+if [ -n "$LATEST" ]; then
+  cp "$LATEST" ~/.claude/settings.json && echo "restored from $LATEST"
+else
+  # 无备份则精确移除 ASG hook 项
+  python3 - <<'PYEOF'
+import json, pathlib
+p = pathlib.Path.home() / ".claude" / "settings.json"
+cfg = json.loads(p.read_text() or "{}")
+for name, arr in list(cfg.get("hooks", {}).items()):
+    kept = [g for g in arr
+            if not any("asg-report" in h.get("command", "")
+                       for h in g.get("hooks", []))]
+    if kept: cfg["hooks"][name] = kept
+    else: cfg["hooks"].pop(name, None)
+if not cfg.get("hooks"): cfg.pop("hooks", None)
+p.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+print("ASG hooks removed")
+PYEOF
+fi
+
+rm -rf ~/.asg && echo "~/.asg removed"
+```
+
+#### 2.9.9 接入方式对照表
+
+| 方式 | 需要 sudo | 需要二进制 | 常驻进程 | 改 shell 配置 | 设环境变量 | 改 base_url | 能拿模型真值 | 能拦截 |
+|---|---|---|---|---|---|---|---|---|
+| **Hook（本节，默认）** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 自报 | ✅ PreToolUse |
+| OTLP（可选补充） | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | 自报 | ❌ |
+| Proxy（可选增强） | ❌ | ✅ `~/.asg/bin/` | ✅ | ❌ | ❌ | ✅ | **✅ 网关实测** | ✅ 全量 |
+
+**默认只装 Hook**。Proxy 通道仅在用户明确要求"要模型真值 + 全量管控"时叠加，且探针也装在 `~/.asg/bin/`，同样不需要 sudo。
+
+#### 2.9.10 故障自救
+
+| 症状 | 原因 | 处置 |
+|---|---|---|
+| Claude Code 输入框乱码 | **本方案不会导致**（脚本静默 + 不设环境变量）。若出现，说明残留了旧的 `OTEL_*` 变量 | `env \| grep OTEL` 检查并从 `~/.zshrc` 清除，然后 `exec $SHELL` |
+| 控制台看不到 agent | 未注册 / tenant key 错 | 重跑 2.9.5，看返回体 |
+| 有注册无活动 | hook 未生效 | 重跑 2.9.7 第 2 步；确认已重启 Claude Code |
+| `settings.json` 损坏 | JSON 合并失败 | 执行 2.9.8 从备份还原 |
+| 想彻底移除 | — | 执行 2.9.8 |
+
+---
+
+### 2.10 M1 验收脚本
 
 ```bash
 # 网关侧执行
@@ -332,10 +573,11 @@ curl -s $HUB/api/agents | jq '.[] | {agent_id, status, last_activity}'
 curl -s "$HUB/api/agents/detail?agent_id=<id>" | jq '.chain[] | {at, tool, verdict}'
 ```
 **通过判据**：
-1. 远端仅执行 2.8 的 4 步，未改 `ANTHROPIC_BASE_URL`，未设任何 `OTEL_*`。
+1. 远端仅执行 2.9 的步骤，**未改 `ANTHROPIC_BASE_URL`、未设任何 `OTEL_*`、未用 sudo、未下载二进制**。
 2. 远端正常用 Claude Code 做一个任务后，`chain` 数组出现该任务的工具序列。
 3. 5 分钟内 `status=active`；退出 Claude Code 后 2 分钟转 `idle`，再过 5 分钟转 `offline`，**行不消失**。
-4. `asg-connect uninstall` 后 `settings.json` 与安装前 `diff` 为空。
+4. 执行 2.9.8 回滚后，`settings.json` 与安装前 `diff` 为空，`~/.asg` 不存在。
+5. **全程 Claude Code 可正常使用，输入框无任何异常。**
 
 ---
 
@@ -695,13 +937,52 @@ providers:                     # Proxy 通道（可选）
 
 | 场景 | 通道 | 可见性 | 管控力度 | 备注 |
 |---|---|---|---|---|
-| Mac + Claude Code + cc-switch | Hook | 工具链路、会话、活动 | Hook 可阻断工具（PreToolUse 非零退出） | 模型 = self-reported |
+| Mac + Claude Code + cc-switch | Hook | 工具链路、会话、活动 | Hook 可阻断工具（PreToolUse 非零退出） | 模型 = self-reported；**零 sudo / 零二进制 / 零常驻进程** |
 | 本机 + OpenCode | Hook + OTLP | 链路 + token/cost | 同上 | 模型 = self-reported（OTLP span） |
-| 自研 agent 愿改 base_url | Proxy | **全量请求/响应** | **三轴全生效** | 模型 = gateway-observed ✅ |
+| 自研 agent 愿改 base_url | Proxy | **全量请求/响应** | **三轴全生效** | 模型 = gateway-observed ✅；探针装 `~/.asg/bin/`，仍不需 sudo |
 | 通过 `/mcp` 的工具调用 | MCP | 工具参数与结果 | 三轴全生效 | 现状已支持 |
 | 离线机器 | — | 显示 offline（不消失） | — | 仅手动删除 |
 | 一机多 harness | 各自 Hook | **每 harness 一行** | 各自策略 | agent_id = machine-id + harness |
 | 多租户 SaaS | 全部 | 按 tenant_key 隔离 | per-agent 策略 | `internal/authn` 已有租户模型 |
+
+### 9.1 部署形态硬约束（不可违反）
+
+以下每一条都对应一次真实事故，实现时必须遵守：
+
+| 约束 | 违反后果 |
+|---|---|
+| 上报脚本不得向 stdout/stderr 写任何内容 | harness TUI（Ink）光标错乱 → 输入框乱码 |
+| 不得设置任何全局 `OTEL_*` 环境变量 | 同上（OTel SDK 诊断日志默认 INFO 写 console） |
+| 不得整文件覆盖 harness 配置 | 破坏用户的模型路由代理与凭证 → agent 直接不可用 |
+| 观察路径永远 `exit 0` | 上报故障演变成 agent 故障 |
+| 不得用 PowerShell `Out-File utf8` 写 `data/` 下 JSON | BOM 导致 gateway 启动崩溃 |
+| 模型必须透传，禁止保底重映射 | 控制台所有 agent 显示同一个模型 |
+| **注入脚本必须显式接收目标根目录参数，不得依赖 `Path.home()` / `$HOME`** | **见下方 9.2 —— 开发机实测时污染了真实配置** |
+
+### 9.2 实测记录与踩坑（2026-08-28）
+
+**已实测通过的部分**（在隔离目录 `%TEMP%/asgtest` 内，模拟含 `env.ANTHROPIC_BASE_URL` + `env.ANTHROPIC_AUTH_TOKEN` + `permissions` 的真实配置）：
+
+| 验证项 | 结果 |
+|---|---|
+| JSON 合并保留原配置 | ✅ `env` / `permissions` 全部完整保留 |
+| 幂等性（重复执行） | ✅ 输出 `already installed, skip`，hook 数量保持 1 不增长 |
+| 回滚（无备份路径） | ✅ 精确移除 3 个 ASG hook，`asg-report` 残留检查 = `False`，`env`/`permissions` 完好 |
+| 上报脚本静默性 | ✅ `MARKER-START` 与 `MARKER-END exit=0` 之间零输出 |
+| 端到端上报 | ✅ 网关 `last_activity` 从 `02:02:22` 推进到 `03:43:02` |
+
+**踩到的坑（实现 `harness.Install()` 时必须规避）**：
+
+1. **Windows 上 `pathlib.Path.home()` 读 `USERPROFILE`，不读 `HOME`**
+   测试时用 `export HOME=$PWD` 试图隔离，但 Python 仍解析到真实的 `C:\Users\yyyyc`，**导致注入脚本写进了开发机真实的 `~/.claude/settings.json`**（已用回滚逻辑还原，`PreToolUse` 原有 hook 完好）。
+   → **实现要求**：`harness.Install()` / 注入脚本必须**显式接收目标根目录参数**（`sys.argv[1]` 或 Go 侧显式传路径），禁止内部调用 `Path.home()`。这既是测试隔离的需要，也是未来支持 `--home` 覆盖的基础。
+
+2. **MSYS/git-bash 路径不会自动转换给原生程序**
+   `python - "$PWD"` 传入 `/c/Users/...` 形式，原生 Python 解析成 `\tmp\asgtest` 而失败。
+   → **实现要求**：Windows 侧传路径给原生工具前用 `pwd -W` / `cygpath -w` 转成原生形式。远端 macOS/Linux 无此问题，但跨平台安装器需处理。
+
+3. **回滚逻辑本身是可靠的**
+   这次意外污染恰好实测了 9.2 表格里的「回滚」路径 —— 精确移除生效，原有 `PreToolUse` hook 与 `env` 配置零损伤。这条回滚路径已被真实场景验证过一次。
 
 ---
 

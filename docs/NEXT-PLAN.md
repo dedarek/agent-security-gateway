@@ -121,13 +121,18 @@ export OTEL_METRIC_EXPORT_INTERVAL=60000
 
 ### 3.1 接入层
 
-#### 3.1.1 Hook 分发器 `asg-connect init`
+#### 3.1.1 Hook 分发器（零二进制 / 零 sudo / 零常驻进程）
+
+> **部署形态定案**：Hook 通道**不下载任何二进制、不需要 sudo、不写系统目录、不留常驻进程、不碰 shell 配置、不设环境变量**。
+> 安装物 = `~/.asg/asg-report`（POSIX sh 脚本）+ `~/.asg/config`。依赖仅 `sh` + `curl`。
+> 完整交付文案见 `DESIGN-V1.md` §2.9。
 
 - **来源**：自研，但 hook 规范来自各 harness 官方文档
   - Claude Code：`https://code.claude.com/docs/en/hooks` — `PreToolUse` / `PostToolUse` / `SessionStart` / `SessionEnd` / `Stop`，`type:command`，`async:true`
   - OpenCode：`opencode.jsonc` 的 `plugin` 数组
   - Codex：`notify` 配置项
 - **介入方式**：探测 harness 配置文件存在性 → **JSON 合并**（非覆盖）写入 hook 段 → 原文件备份为 `<file>.asg-backup-<ts>`
+- **安装位置**：`~/.asg/`（用户家目录，无权限问题）；探针二进制（仅 Proxy 通道需要）装 `~/.asg/bin/`，同样不进 `/usr/local/bin`
 - **可配置项**：
   ```
   hub_url         上报地址
@@ -137,7 +142,8 @@ export OTEL_METRIC_EXPORT_INTERVAL=60000
   detail_level    minimal(仅活动) | tool(含工具名) | full(含参数摘要)
   sample_rate     采样率，默认 1.0
   ```
-- **回滚**：`asg-connect uninstall` 还原备份 + 移除注册行（用户要求必须有）
+- **三条硬规则**（违反任一都发生过事故）：脚本不得写 stdout/stderr；观察路径永远 `exit 0`；curl 有界超时 2s
+- **回滚**：还原备份 + 精确移除 ASG hook 项 + `rm -rf ~/.asg`（用户要求必须有）
 
 #### 3.1.2 Proxy 通道（现有 `cmd/asg-connect serve`）
 
