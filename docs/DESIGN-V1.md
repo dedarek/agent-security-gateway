@@ -772,6 +772,60 @@ Agent 侧收到的结构化错误：
 ```
 **通过判据**：agent 侧收到 `asg_policy_block` + `DATA_EXFIL_RISK`；控制台链路显示两步、第二步红色、命中策略可点开看 evidence。
 
+### 4.7 L1/L2 超时选型（Task 0b 实测锁定 2026-08-28）
+
+> 本节所有数字来自 `docs/VERIFICATION.md` Task 0c A/B 实测（n=20，同一时刻、同 curl 方法、fresh-process 模型），不得拍脑袋修改。Task 2b/3/6 的 `ASG_L1_TIMEOUT`/`ASG_L2_TIMEOUT` 均以此为准，支持 env 覆盖。
+
+#### 4.7.1 实测基线（fresh TLS，每次新进程新握手，模拟 `asg-guard`）
+
+| 传输 | n | p50 | p90 | max | mean | 来源 | 备注 |
+|------|---|-----|-----|-----|------|------|------|
+| **cpolar `vip.cpolar.cn`（主入口，现状）** | 20 | **1.663s** | **2.981s** | **5.404s** | 2.012s | `VERIFICATION.md: Step 3 cp.txt` / 任务背景 | 与最终基线 p50=1.89/p90=3.74 量级一致，去异常值后 p50=1.536/p90=2.820 |
+| **CF `trycloudflare.com`（WSL/1.1.1.1，对比）** | 20 | **0.872s** | **1.381s** | **5.402s** | 1.150s | `VERIFICATION.md: Step 3 cf.txt` | 快 47%/54%，但未达 <0.3s 判据 |
+| 本地 `/api/activity` BLOCK 全链路 | 10 | **0.016s** | — | 0.041s | — | `VERIFICATION.md: Step 0.5` / 任务背景 | 证明隧道占 >99% |
+| 本地 `127.0.0.1:8090/healthz` | — | **0.002s** | — | 0.003s | — | Step 4 对照组 | LAN 直连地板 |
+| CF 分段 `tls-tcp` | 3 | — | — | — | **0.423s** (avg) | `VERIFICATION.md: Step 4 CF 3次` | 判据 >0.1s 未达 |
+| cpolar 分段 `tls-tcp` | 3 | — | — | — | **1.330s** (avg) | `VERIFICATION.md: Step 4 cpolar 3次` | 波动大 0.78–1.86s |
+
+对照组（同网络 fresh）：`cloudflare.com` tls-tcp 0.399–0.836s / `trycloudflare.com` 0.396–0.411s / `google.com` 0.406–2.04s — 证明 **0.42s 是本机 fresh TLS 普遍地板**，非 CF 独有。
+
+#### 4.7.2 推导逻辑
+
+- **目标**：误拒率 `P(RTT > 超时) < 1%` → 超时需 > p99。
+- **n=20 估算**：无足够样本直接取 p99，按保守估计 `p99 ≈ max`（20 样本中最大值≈ 95% 分位，上界当 p99 用）。因此：
+  - cpolar p90=2.981 → p99≈max 5.404s
+  - CF p90=1.381 → p99≈max 5.402s（含单次 5.4s 异常重传，去异常值后 CF p90=1.375、cpolar p90=2.820，max 仍是长尾证据）
+- **fail-open vs fail-closed**：
+  - L1（一般写，`Write`/`Edit`）→ `fail-open`：超时放行，误拒无代价，可取接近 p50 偏保守的值，减少用户等待。
+  - L2（高危，`Bash`/`WebFetch`/敏感路径）→ `fail-closed`：超时拒绝，误拒会打断用户，必须覆盖 p90 以上，宁可让用户多等 2s 也不误拒。
+- **fresh TLS 地板 0.42s 使 p50<0.3s 不可达**：
+  - 分段实测：TCP ~9ms（LA 出口→sjc05/44.0.1.x 近），但 `tls-tcp` CF 0.423s / cpolar 1.33s，TTFB 再 +0.47–1.66s。0.42s 在所有外网 fresh TLS 中复现（对照组同为 0.40–0.43s），且 `requests.Session` 复用 5 次仍 0.43s，说明是 `wintun/tun2socks` 代理的固定 TLS 终结/复加解密成本。
+  - 计划 §0.6 判定 `p50<0.3s` 在 fresh-process 模型下不可达 → **CF 未达标，cpolar 保持主入口**；<0.3s 只能靠 **HTTP hook 连接池**（`type:"http"`，CC 进程自持连接，省 0.42s 握手）实现，见 4.7.4。
+
+#### 4.7.3 误拒率估算
+
+| 传输 | L2 超时 | p90 | max(≈p99) | P(RTT> L2) 估算 | 结论 |
+|------|---------|-----|-----------|----------------|------|
+| cpolar 主入口 | **5s** | 2.981s | 5.404s | **≈1/20 =5%**（本次 1/20 >5s） | **不满足 <1%**，但已是最小可用值；p90 已覆盖，剩余 5% 长尾靠 `ASG_BYPASS=1` 逃生舱 + 事后补报可见性缓解；HTTP hook 可降至 2s 且 <1% |
+| CF 备用 | **3s** | 1.381s | 5.402s(异常) / 去异常 1.375 | 含异常≈5%，去异常≈0% | 3s 远超去异常 p90，若无 5.4s 异常则 <1%；双入口时可作加速 |
+| LAN | **2s** | 0.003s | 0.003s | **≈0%** | 500×余量，<1% 轻松满足 |
+| HTTP hook（预期，复用） | **2s** | ~0.4s(预估省 0.42s) | ~1.0s | **<1%** | 连接复用省 0.42s 地板后接近 LAN，1s/2s 即满足 |
+
+- **L1 误拒无害**（fail-open）：cpolar L1=3s 覆盖 p90=2.98 仅边际（`P(RTT>3s)≈10%`：20 样本中 2/20 >2.98，其中 1 接近 2.98、1 为 5.4），但超时仅意味着多等 3s 后放行，不阻塞用户，故可接受。
+
+#### 4.7.4 超时参数锁定表（Task 2b/3/6 统一入口）
+
+| 传输 | 实测 p50 | L1 超时（一般写，fail-open） | L2 超时（高危，fail-closed） | Hook 超时 | 选型依据 | env 覆盖 |
+|------|---------|------------------------------|------------------------------|-----------|----------|----------|
+| **LAN 直连** `192.168.101.100:8090` | 0.002s | **1s** | **2s** | L+3 = 4s/5s | p50 的 **500×** 余量；本地 BLOCK 全链路仅 16ms，1s/2s 远超 p99=0.04s，误拒 0% | `ASG_L1_TIMEOUT` / `ASG_L2_TIMEOUT` |
+| **CF Tunnel** `trycloudflare.com`（备用/双入口） | 0.872s | **2s** | **3s** | 5s/6s | L1 2s > p90=1.381 (+45%)；L2 3s > 2×p90，去异常后 <1%，含异常~5%；tls-tcp 0.423 地板已计入 | 同上（`PUB_URL` 含 cloudflare 时 `asg-probe-transport` 自动选 2/3） |
+| **cpolar** `vip.cpolar.cn` **（当前主入口）** | **1.663s** | **3s** | **5s** | 6s/8s | L1 3s 刚覆盖 p90=2.981（边际）；L2 5s 覆盖 p90 但对 max=5.404 仍有 ~5% 误拒，需在文档与 `deny_unreachable` 提示中明确“**误拒率约 5%，靠 `ASG_BYPASS=1` 逃生舱缓解，且 HTTP hook 可降至 1s 以内**”；`asg-probe-transport` 公网默认 3/5，`asg-guard` 默认亦 3/5 | 同上 |
+| **HTTP hook 快路径** `type:"http"`（CC 原生连接池，预期） | —（复用时省 0.42s 地板，预期 p50~0.3–0.5s） | **1s** | **2s** | 4s/5s | 连接复用省去 fresh TLS 0.42s 地板，接近 LAN 量级，故与 LAN 同档 1s/2s 即可 <1%；`ASG_USE_HTTP_HOOK=1` 时 `asg-probe-transport` 选 1/2 | `ASG_USE_HTTP_HOOK` / `ASG_HTTP_HOOK_URL` |
+
+- **Hook 超时** = `curl max-time +3s` 裕量（`asg-guard` 中 `curl --max-time $TIMEOUT`，harness hook kill 在 TIMEOUT+3），防止 harness 先杀脚本。
+- **所有超时均有实测支撑**，来源见 4.7.1 表；不得拍脑袋下调 L2（尤其 cpolar 5s 已是底线，2s 会误拒 ~30%）。
+- **双入口探测**：`scripts/asg-probe-transport` 按 URL 自动择优（LAN 1/2 → HTTP 1/2 → CF 2/3 → cpolar 3/5），env `ASG_L1_TIMEOUT`/`ASG_L2_TIMEOUT` 始终最高优先级覆盖。
+
 ---
 
 ## 5. M4 控制台重构
@@ -912,6 +966,30 @@ providers:                     # Proxy 通道（可选）
     default_model: "hy3"
     # allowed_models / model_map 已永久删除：模型必须透传
 ```
+
+### 7.3 客户端超时 `~/.asg/config`（Task 0b 实测锁定，见 §4.7）
+
+```sh
+# 由 scripts/asg-probe-transport 按实测传输自动写入，env 覆盖优先
+ASG_HUB="https://asg-gateway.vip.cpolar.cn"   # 或 http://192.168.101.100:8090 / http hook URL
+ASG_TRANSPORT="public"                         # lan | public | http
+ASG_L1_TIMEOUT=3                               # L1 一般写 fail-open（cpolar 主入口 3s，LAN 1s，CF 2s，HTTP 1s）
+ASG_L2_TIMEOUT=5                               # L2 高危 fail-closed（cpolar 主入口 5s，LAN 2s，CF 3s，HTTP 2s）
+ASG_GUARD_TIMEOUT=5                            # 兼容旧变量，等同 ASG_L2_TIMEOUT
+ASG_GUARD_MATCHER="Bash|Write|Edit|WebFetch|NotebookEdit"  # public 收窄；LAN 为 "*"
+# HTTP hook 快路径（仅 Claude Code）
+ASG_USE_HTTP_HOOK=0
+ASG_HTTP_HOOK_URL=""
+```
+
+| 变量 | 默认（cpolar 主入口） | LAN | CF 备用 | HTTP hook | 说明 |
+|------|----------------------|-----|---------|-----------|------|
+| `ASG_L1_TIMEOUT` | **3** | 1 | 2 | 1 | L1 超时，`asg-guard` 中 `curl --max-time`；fail-open |
+| `ASG_L2_TIMEOUT` | **5** | 2 | 3 | 2 | L2 超时，`asg-guard` 中 `curl --max-time`；fail-closed，超时输出 `ASG_UNREACHABLE` deny JSON |
+| `ASG_GUARD_TIMEOUT` | 5 | 2 | 3 | 2 | 旧变量兼容，优先级低于 L1/L2 |
+| `ASG_TRANSPORT` | public | lan | public | http | `asg-probe-transport` 写入，仅记录 |
+
+> 实测依据：cpolar p50=1.663/p90=2.981/max=5.404，CF p50=0.872/p90=1.381/max=5.402，LAN p50=0.002，tls-tcp 地板 0.423s（详见 §4.7.1）。L2=5s 在 cpolar 上误拒率约 5%（1/20），靠 `ASG_BYPASS=1` 逃生舱缓解，HTTP hook 可降至 1–2s 内 <1%。
 
 ---
 

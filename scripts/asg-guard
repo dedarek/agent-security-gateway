@@ -7,6 +7,15 @@
 #   3. Only stdout is the decision JSON. Diagnostics go to stderr.
 #   4. Only BLOCK is enforced. CONFIRM/ALLOW fall through.
 #   5. L0 bypasses network entirely. BYPASS=1 bypasses and leaves audit trail.
+#
+# TIMEOUTS — Task 0b measured 2026-08-28 (VERIFICATION.md Step 3, n=20 fresh-process):
+#   cpolar vip.cpolar.cn: p50=1.663 p90=2.981 max=5.404 mean=2.012 → L1 3s / L2 5s (main, P>5s≈5%)
+#   CF trycloudflare:     p50=0.872 p90=1.381 max=5.402 mean=1.15  → L1 2s / L2 3s (备用)
+#   LAN 192.168.101.100:  p50=0.002 max=0.003                  → L1 1s / L2 2s
+#   HTTP hook (reuse):   预期省 0.42s 地板                    → L1 1s / L2 2s
+#   fresh TLS 地板 0.423s (tls-tcp, n=3 avg) 使 p50<0.3s 在 fresh 模型下不可达 → CF 未达标，cpolar 主入口保留
+#   误拒率: P(RTT>timeout). 要求 <1% (>p99), n=20 时 p99≈max. cpolar L2=5s 对 max 5.4s 仍有 ~5% 误拒，靠 ASG_BYPASS 逃生舱缓解.
+#   超时由 asg-probe-transport 按传输写入 ~/.asg/config，env ASG_L1_TIMEOUT/ASG_L2_TIMEOUT 最高优先级覆盖.
 
 # 0. load config (if missing -> fail-open)
 if [ ! -r "$HOME/.asg/config" ]; then
@@ -70,8 +79,9 @@ fi
 
 # 5. derive timeout and fail mode per level
 # support both new L1/L2 vars and legacy ASG_GUARD_TIMEOUT
+# defaults: cpolar 主入口 L1 3s / L2 5s (任务 Task 0b: p50=1.663 p90=2.981 max=5.404); LAN/CF/HTTP 由 probe 写入 1/2 / 2/3 / 1/2
 if [ "$LEVEL" = "L1" ]; then
-  TIMEOUT="${ASG_L1_TIMEOUT:-${ASG_GUARD_TIMEOUT:-2}}"
+  TIMEOUT="${ASG_L1_TIMEOUT:-${ASG_GUARD_TIMEOUT:-3}}"
   FAIL_MODE="open"
 else
   # L2 (and any unknown -> treat as L2 for safety)
@@ -79,9 +89,9 @@ else
   FAIL_MODE="closed"
 fi
 
-# ensure TIMEOUT is numeric, fallback
+# ensure TIMEOUT is numeric, fallback to cpolar L1 3s
 case "$TIMEOUT" in
-  ''|*[!0-9]*) TIMEOUT=2 ;;
+  ''|*[!0-9]*) TIMEOUT=3 ;;
 esac
 
 # helper: deny due to unreachable gateway (fail-closed)
