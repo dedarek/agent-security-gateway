@@ -1,0 +1,150 @@
+#!/bin/sh
+# asg-probe-transport — triple transport probe (HTTP hook -> LAN -> public)
+# Picks the fastest reachable ASG transport and writes ~/.asg/config fragment.
+# Usage: asg-probe-transport [lan_url] [public_url]
+# Outputs selected transport to stdout (lan|public|http|none), writes config.
+# POSIX sh, only curl dependency. Env overrides: ASG_L1_TIMEOUT/ASG_L2_TIMEOUT
+
+set -eu
+
+LAN_URL="${1:-http://192.168.101.100:8090}"
+PUB_URL="${2:-https://asg-gateway.vip.cpolar.cn}"
+
+# optional HTTP hook fast path (Claude Code type:http only)
+# If env signals that http hook is available, prefer it (zero extra handshake)
+if [ "${ASG_USE_HTTP_HOOK:-0}" = "1" ] || [ -n "${ASG_HTTP_HOOK_URL:-}" ]; then
+  _http_hub="${ASG_HTTP_HOOK_URL:-$PUB_URL}"
+  echo "[asg-probe] http hook fast path selected" >&2
+  echo "http"
+  # write config for guard fallback (http hook still needs hub for compat)
+  mkdir -p "$HOME/.asg" 2>/dev/null || true
+  _cfg="$HOME/.asg/config"
+  # ensure config exists
+  if [ ! -f "$_cfg" ]; then
+    printf 'ASG_HUB="%s"\n' "$_http_hub" > "$_cfg"
+  fi
+  # update or append ASG_HUB and transport
+  if grep -q "^ASG_HUB=" "$_cfg" 2>/dev/null; then
+    # use temp file for portability
+    _tmp=$(mktemp 2>/dev/null || echo "$_cfg.tmp")
+    sed "s|^ASG_HUB=.*|ASG_HUB=\"$_http_hub\"|" "$_cfg" > "$_tmp" && cat "$_tmp" > "$_cfg" && rm -f "$_tmp"
+  else
+    printf 'ASG_HUB="%s"\n' "$_http_hub" >> "$_cfg"
+  fi
+  # derive timeouts: env overrides else http defaults (1/3, generous)
+  _l1="${ASG_L1_TIMEOUT:-1}"
+  _l2="${ASG_L2_TIMEOUT:-3}"
+  # upsert timeouts
+  for _kv in "ASG_L1_TIMEOUT=$_l1" "ASG_L2_TIMEOUT=$_l2" "ASG_GUARD_TIMEOUT=$_l2" "ASG_TRANSPORT=http" "ASG_HUB=\"$_http_hub\""; do
+    _k=$(printf '%s' "$_kv" | cut -d= -f1)
+    _v=$(printf '%s' "$_kv" | cut -d= -f2-)
+    if grep -q "^$_k=" "$_cfg" 2>/dev/null; then
+      _tmp=$(mktemp 2>/dev/null || echo "$_cfg.tmp")
+      # escape for sed
+      sed "s|^$_k=.*|$_k=$_v|" "$_cfg" > "$_tmp" && cat "$_tmp" > "$_cfg" && rm -f "$_tmp"
+    else
+      printf '%s=%s\n' "$_k" "$_v" >> "$_cfg"
+    fi
+  done
+  exit 0
+fi
+
+# helper: probe url/healthz with bounded timeout, return 0 if HTTP 200
+_probe() {
+  _url="$1"
+  _to="$2"
+  # Windows native curl does not understand /dev/null as output file; try both
+  _code=""
+  # try POSIX /dev/null first, then Windows NUL, then no output file
+  _code=$(curl -s -o /dev/null -w '%{http_code}' --max-time "$_to" "$_url/healthz" 2>/dev/null || true)
+  if [ "$_code" = "200" ]; then return 0; fi
+  # fallback: Windows NUL
+  _code=$(curl -s -o NUL -w '%{http_code}' --max-time "$_to" "$_url/healthz" 2>/dev/null || true)
+  if [ "$_code" = "200" ]; then return 0; fi
+  # last fallback: discard via shell redirection, capture code via -w without -o
+  _code=$(curl -s -w '%{http_code}' --max-time "$_to" "$_url/healthz" 2>/dev/null | tail -c 3 || true)
+  # tail may capture body tail; check if ends with 200
+  case "$_code" in
+    *200) return 0 ;;
+  esac
+  return 1
+}
+
+# helper: upsert key=value into ~/.asg/config
+_upsert_config() {
+  _cfg="$1"; _k="$2"; _v="$3"
+  if grep -q "^$_k=" "$_cfg" 2>/dev/null; then
+    _tmp=$(mktemp 2>/dev/null || echo "$_cfg.tmp")
+    # use @ as sed delimiter to avoid slash in URLs
+    # escape & for sed replacement
+    _esc_v=$(printf '%s' "$_v" | sed 's/[&]/\\&/g')
+    sed "s@^$_k=.*@$_k=$_esc_v@" "$_cfg" > "$_tmp" && cat "$_tmp" > "$_cfg" && rm -f "$_tmp"
+  else
+    printf '%s=%s\n' "$_k" "$_v" >> "$_cfg"
+  fi
+}
+
+# detect LAN first (fast path for self-hosted)
+# LAN probe with 1s timeout (LAN p50=2ms, 1s is 500x margin)
+if _probe "$LAN_URL" 1; then
+  echo "[asg-probe] LAN reachable: $LAN_URL" >&2
+  echo "lan"
+  mkdir -p "$HOME/.asg" 2>/dev/null || true
+  _cfg="$HOME/.asg/config"
+  if [ ! -f "$_cfg" ]; then : > "$_cfg"; fi
+  # guard timeouts for LAN: L1=1 L2=2 (500x margin), allow env override
+  _l1="${ASG_L1_TIMEOUT:-1}"
+  _l2="${ASG_L2_TIMEOUT:-2}"
+  _upsert_config "$_cfg" "ASG_HUB" "\"$LAN_URL\""
+  _upsert_config "$_cfg" "ASG_L1_TIMEOUT" "$_l1"
+  _upsert_config "$_cfg" "ASG_L2_TIMEOUT" "$_l2"
+  _upsert_config "$_cfg" "ASG_GUARD_TIMEOUT" "$_l2"
+  # matcher: LAN can cover all (*) because 2ms; but L0 still bypasses via classifier
+  _upsert_config "$_cfg" "ASG_GUARD_MATCHER" '"*"'
+  _upsert_config "$_cfg" "ASG_TRANSPORT" "lan"
+  chmod 600 "$_cfg" 2>/dev/null || true
+  exit 0
+fi
+
+# fallback to public tunnel — probe with max-time 3 (cpolar p90=3.74s, allow CF 0.2s)
+# use 2s probe timeout for cpolar detection; if fails try 5s once
+_pub_to=2
+if [ -n "${ASG_PROBE_TIMEOUT:-}" ]; then _pub_to="$ASG_PROBE_TIMEOUT"; fi
+if _probe "$PUB_URL" "$_pub_to"; then
+  :
+else
+  # retry with longer timeout for slow tunnel
+  if ! _probe "$PUB_URL" 5; then
+    echo "[asg-probe] no transport reachable (LAN $LAN_URL, PUB $PUB_URL)" >&2
+    echo "none"
+    exit 1
+  fi
+fi
+
+echo "[asg-probe] public reachable: $PUB_URL" >&2
+echo "public"
+mkdir -p "$HOME/.asg" 2>/dev/null || true
+_cfg="$HOME/.asg/config"
+if [ ! -f "$_cfg" ]; then : > "$_cfg"; fi
+# derive timeouts based on suspected backend: cf vs cpolar
+# default public is cpolar (2/5), cf (1/3) if URL contains cloudflare/trycloudflare
+_l1_pub=2
+_l2_pub=5
+case "$PUB_URL" in
+  *cloudflare*|*trycloudflare*)
+    _l1_pub=1
+    _l2_pub=3
+    ;;
+esac
+# env overrides take precedence
+_l1="${ASG_L1_TIMEOUT:-$_l1_pub}"
+_l2="${ASG_L2_TIMEOUT:-$_l2_pub}"
+_upsert_config "$_cfg" "ASG_HUB" "\"$PUB_URL\""
+_upsert_config "$_cfg" "ASG_L1_TIMEOUT" "$_l1"
+_upsert_config "$_cfg" "ASG_L2_TIMEOUT" "$_l2"
+_upsert_config "$_cfg" "ASG_GUARD_TIMEOUT" "$_l2"
+# matcher narrowed for tunnel: only side-effecting tools
+_upsert_config "$_cfg" "ASG_GUARD_MATCHER" '"Bash|Write|Edit|WebFetch|NotebookEdit"'
+_upsert_config "$_cfg" "ASG_TRANSPORT" "public"
+chmod 600 "$_cfg" 2>/dev/null || true
+exit 0
