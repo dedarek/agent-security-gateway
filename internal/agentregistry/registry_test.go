@@ -99,7 +99,7 @@ func TestUpsertHeartbeatAndPersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ = r.Get("a-1")
-	if got.Status != "online" || got.IP != "10.0.0.2" {
+	if got.Status != "active" || got.IP != "10.0.0.2" {
 		t.Fatalf("expected heartbeat IP, got %q status %q", got.IP, got.Status)
 	}
 	if err := r.ObserveModel("a-1", "actual-model", "", time.Now().UTC()); err != nil {

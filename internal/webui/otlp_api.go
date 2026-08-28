@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dedarek/agent-security-gateway/internal/activity"
 	"github.com/dedarek/agent-security-gateway/internal/agentregistry"
 	"github.com/dedarek/agent-security-gateway/internal/otlp"
 )
@@ -114,8 +115,11 @@ func (s *Server) apiOTLPTraces(w http.ResponseWriter, r *http.Request) {
 // apiAgentActivity is the generic activity beacon for harnesses with hook
 // mechanisms (Claude Code PostToolUse, OpenCode plugin callbacks, Codex
 // notify). Plain JSON POST, no protobuf. Body:
-//   {"agent_id":"...","agent_type":"...","model":"...","session_id":"...","event":"tool_use"}
+//   {"agent_id":"...","agent_type":"...","model":"...","session_id":"...","event":"tool_use","detail":"tool","hook_payload":{...}}
 // All fields optional except agent_id. Registered agents only.
+// hook_payload is parsed per-harness to extract tool name / session.
+// The normalized Step is kept in the in-memory activity store and the
+// agent's LastActivity is advanced.
 func (s *Server) apiAgentActivity(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -126,13 +130,15 @@ func (s *Server) apiAgentActivity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		AgentID   string `json:"agent_id"`
-		AgentType string `json:"agent_type"`
-		Model     string `json:"model"`
-		SessionID string `json:"session_id"`
-		Event     string `json:"event"`
+		AgentID     string          `json:"agent_id"`
+		AgentType   string          `json:"agent_type"`
+		Model       string          `json:"model"`
+		SessionID   string          `json:"session_id"`
+		Event       string          `json:"event"`
+		Detail      string          `json:"detail"`
+		HookPayload json.RawMessage `json:"hook_payload"`
 	}
-	_ = json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&body)
+	_ = json.NewDecoder(io.LimitReader(r.Body, 256<<10)).Decode(&body)
 	agentID := strings.TrimSpace(body.AgentID)
 	if agentID == "" {
 		agentID = strings.TrimSpace(r.Header.Get(publicAgentHeader))
@@ -147,16 +153,46 @@ func (s *Server) apiAgentActivity(w http.ResponseWriter, r *http.Request) {
 	}
 	ip := remoteHost(r.RemoteAddr)
 	now := time.Now().UTC()
-	// Hook-driven activity is real activity: advance LastActivity so the
-	// 5-minute online window actually reflects hook events, not just LLM/OTLP.
+	// Resolve session / tool from hook_payload if not already set.
+	sessionID := strings.TrimSpace(body.SessionID)
+	toolName, summary := parseHookPayload(body.HookPayload, body.Detail, &sessionID)
+	kind := strings.TrimSpace(body.Event)
+	if kind == "" {
+		kind = "tool_use"
+	}
+	// Persist activity chain.
+	if s.Activity != nil {
+		step := activity.Step{
+			At:        now,
+			AgentID:   agentID,
+			SessionID: sessionID,
+			Kind:      kind,
+			ToolName:  toolName,
+			Summary:   summary,
+			Raw:       body.HookPayload,
+		}
+		// Only store meaningful steps (kind/session/tool) or forced keepalive
+		if toolName != "" || sessionID != "" || kind == "session_start" || kind == "session_end" {
+			s.Activity.Add(step)
+		} else if body.Model != "" || body.SessionID != "" {
+			// Model/session ping without hook payload — still record as generic event
+			s.Activity.Add(step)
+		} else {
+			// Pure keepalive — store minimal marker so the chain shows liveness,
+			// but avoid spamming when hooks fire with empty payloads.
+			if kind != "tool_use" {
+				s.Activity.Add(step)
+			}
+		}
+	}
+	// Advance registry state.
 	if body.Model != "" {
 		_ = s.Agents.ObserveModel(agentID, body.Model, "", now)
 	}
-	if body.SessionID != "" {
-		_ = s.Agents.ObserveSession(agentID, body.SessionID, now)
+	if sessionID != "" {
+		_ = s.Agents.ObserveSession(agentID, sessionID, now)
 	}
-	// If hook carried no model/session (pure ping), still mark active.
-	if body.Model == "" && body.SessionID == "" {
+	if body.Model == "" && sessionID == "" {
 		_ = s.Agents.Heartbeat(agentID, ip, nil, "", "", body.AgentType, "", now)
 		// Force LastActivity forward — Heartbeat doesn't do this anymore.
 		if rec, ok := s.Agents.Get(agentID); ok && rec.LastActivity.Before(now) {
@@ -165,8 +201,113 @@ func (s *Server) apiAgentActivity(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		_ = s.Agents.Heartbeat(agentID, ip, nil, "", "", body.AgentType, "", now)
+		// Ensure LastActivity is at least now (Observe* already set it when needed,
+		// but pure hook events without model/session still need it).
+		if rec, ok := s.Agents.Get(agentID); ok && rec.LastActivity.Before(now) {
+			rec.LastActivity = now
+			_ = s.Agents.Upsert(rec)
+		}
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// parseHookPayload extracts tool/session from raw hook JSON. It handles
+// Claude Code (tool_name/tool_input/session_id), OpenCode (tool/args/sessionID),
+// and generic Codex shapes. detail controls summary cropping: minimal/tool/full.
+func parseHookPayload(raw json.RawMessage, detail string, sessionID *string) (toolName, summary string) {
+	if len(raw) == 0 || string(raw) == "null" || string(raw) == "{}" {
+		return "", ""
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		// Not an object — treat as opaque summary
+		s := string(raw)
+		if len(s) > 800 {
+			s = s[:800]
+		}
+		return "", s
+	}
+	// tool_name can be top-level or nested: try several keys
+	for _, k := range []string{"tool_name", "tool", "toolName", "name"} {
+		if v, ok := m[k]; ok {
+			var s string
+			if json.Unmarshal(v, &s) == nil && strings.TrimSpace(s) != "" {
+				toolName = strings.TrimSpace(s)
+				break
+			}
+		}
+	}
+	// session_id
+	for _, k := range []string{"session_id", "sessionID", "sessionId", "sid"} {
+		if v, ok := m[k]; ok {
+			var s string
+			if json.Unmarshal(v, &s) == nil && strings.TrimSpace(s) != "" && *sessionID == "" {
+				*sessionID = strings.TrimSpace(s)
+				break
+			}
+		}
+	}
+	// Build summary from tool_input / tool_input-like fields, respecting detail
+	if detail == "minimal" {
+		return toolName, ""
+	}
+	var inputRaw json.RawMessage
+	for _, k := range []string{"tool_input", "toolInput", "input", "args", "arguments", "params"} {
+		if v, ok := m[k]; ok {
+			inputRaw = v
+			break
+		}
+	}
+	if len(inputRaw) != 0 && string(inputRaw) != "null" {
+		// Try to produce a compact summary: key=value pairs, cropped
+		var im map[string]any
+		if json.Unmarshal(inputRaw, &im) == nil {
+			// Common Claude Code fields: command / file_path / pattern / url
+			for _, fk := range []string{"command", "file_path", "path", "pattern", "url", "prompt", "query", "content"} {
+				if v, ok := im[fk]; ok {
+					s := jsonOrString(v)
+					if len(s) > 400 {
+						s = s[:400] + "..."
+					}
+					summary = fk + "=" + s
+					break
+				}
+			}
+			if summary == "" {
+				// Fallback: first value
+				for _, v := range im {
+					s := jsonOrString(v)
+					if len(s) > 400 {
+						s = s[:400] + "..."
+					}
+					summary = s
+					break
+				}
+			}
+		} else {
+			var s string
+			if json.Unmarshal(inputRaw, &s) == nil {
+				summary = s
+			} else {
+				summary = string(inputRaw)
+			}
+			if len(summary) > 400 {
+				summary = summary[:400] + "..."
+			}
+		}
+	}
+	if detail == "tool" && len(summary) > 200 {
+		summary = summary[:200] + "..."
+	}
+	return toolName, summary
+}
+
+func jsonOrString(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	b, _ := json.Marshal(v)
+	return string(b)
 }
 
 // apiOTLPLogs accepts ExportLogsServiceRequest. Claude Code's primary

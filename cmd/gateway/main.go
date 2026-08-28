@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/dedarek/agent-security-gateway/api"
+	"github.com/dedarek/agent-security-gateway/internal/activity"
 	"github.com/dedarek/agent-security-gateway/internal/agentregistry"
 	"github.com/dedarek/agent-security-gateway/internal/approval"
 	"github.com/dedarek/agent-security-gateway/internal/audit"
@@ -178,6 +179,7 @@ func serveCmd(args []string) {
 	}
 	uiSrv := webui.New(evStore, approvals, hub)
 	uiSrv.SetAgentRegistry(agentReg)
+	uiSrv.SetActivityStore(activity.New())
 	uiSrv.SetIngestAuth(func(header string) bool {
 		_, ok := authReg.Authenticate(header)
 		return ok

@@ -58,7 +58,10 @@ var validIsolation = map[string]bool{
 	"active": true, "paused": true, "restricted": true, "isolated": true,
 }
 
-const activeWindow = 5 * time.Minute
+const (
+	activeWindow    = 5 * time.Minute
+	heartbeatWindow = 2 * time.Minute
+)
 
 type Registry struct {
 	mu      sync.RWMutex
@@ -179,7 +182,9 @@ func (r *Registry) Upsert(in Record) error {
 		}
 	}
 	in.LastHeartbeat = now
-	in.Status = "online"
+	// Status is computed via computeStatus (active/idle/offline), not stored.
+	// Keep stored Status as last computed for persistence, but List/Get recompute.
+	in.Status = computeStatus(in, now)
 	r.records[in.AgentID] = in
 	return r.saveLocked()
 }
@@ -198,8 +203,8 @@ func (r *Registry) Heartbeat(agentID, ip string, observedIPs []string, model, pr
 	now := time.Now().UTC()
 	v.LastHeartbeat = now
 	// Heartbeat only refreshes LastHeartbeat; LastActivity is driven by
-	// real harness activity (OTLP/LLM) via ObserveModel/ObserveSession,
-	// so idle probe heartbeats don't keep a closed harness "always online".
+	// real harness activity (hook/OTLP/LLM) via ObserveModel/ObserveSession
+	// or Upsert. Idle probe heartbeats must not keep a closed harness "active".
 	if ip != "" {
 		if v.IP != ip {
 			v.Changes = append(v.Changes, Change{At: now, Field: "ip", From: v.IP, To: ip, Source: "heartbeat"})
@@ -226,7 +231,8 @@ func (r *Registry) Heartbeat(agentID, ip string, observedIPs []string, model, pr
 	if strings.TrimSpace(alias) != "" {
 		v.Alias = strings.TrimSpace(alias)
 	}
-	v.Status = "online"
+	// Don't set Status here; List/Get compute it from LastActivity/LastHeartbeat
+	// via computeStatus. Stored Status is stale otherwise.
 	r.records[agentID] = v
 	return r.saveLocked()
 }
@@ -343,12 +349,8 @@ func (r *Registry) list(activeOnly bool) []Record {
 		if strings.TrimSpace(v.AgentID) == "" {
 			continue
 		}
-		if !isActiveRecord(v) {
-			v.Status = "offline"
-		} else {
-			v.Status = "online"
-		}
-		if activeOnly && v.Status != "online" {
+		v.Status = computeStatus(v, time.Now())
+		if activeOnly && v.Status == "offline" {
 			continue
 		}
 		out = append(out, v)
@@ -361,8 +363,8 @@ func (r *Registry) Get(agentID string) (Record, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	v, ok := r.records[agentID]
-	if ok && !isActiveRecord(v) {
-		v.Status = "offline"
+	if ok {
+		v.Status = computeStatus(v, time.Now())
 	}
 	return v, ok
 }
@@ -372,13 +374,21 @@ func isActive(lastHeartbeat time.Time) bool {
 }
 
 func isActiveRecord(v Record) bool {
-	// Harness-level online = recent activity, not just probe heartbeat.
-	// Probe-only agents (no LLM/OTLP activity yet) should not appear as
-	// "online · active" after the harness is closed.
-	if v.LastActivity.IsZero() {
-		return false
+	return computeStatus(v, time.Now()) != "offline"
+}
+
+// computeStatus implements the three-state model from DESIGN-V1 §2.8:
+//   active  – real harness activity within 5m
+//   idle    – no activity but probe heartbeat within 2m (process alive, harness idle)
+//   offline – neither
+func computeStatus(v Record, now time.Time) string {
+	if !v.LastActivity.IsZero() && now.Sub(v.LastActivity.UTC()) <= activeWindow {
+		return "active"
 	}
-	return time.Since(v.LastActivity.UTC()) <= activeWindow
+	if !v.LastHeartbeat.IsZero() && now.Sub(v.LastHeartbeat.UTC()) <= heartbeatWindow {
+		return "idle"
+	}
+	return "offline"
 }
 
 func (r *Registry) saveLocked() error {

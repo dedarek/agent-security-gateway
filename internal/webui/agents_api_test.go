@@ -56,7 +56,7 @@ func TestAgentsAPIShowsOnlyCurrentRuntimeAgents(t *testing.T) {
 	for _, a := range got {
 		m[a.AgentID] = a.Status
 	}
-	if m["current-opencode"] != "online" || m["old-test"] != "offline" {
+	if m["current-opencode"] != "active" || m["old-test"] != "offline" {
 		t.Fatalf("status map = %#v", m)
 	}
 }

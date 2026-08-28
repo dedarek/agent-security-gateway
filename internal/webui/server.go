@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/dedarek/agent-security-gateway/api"
+	"github.com/dedarek/agent-security-gateway/internal/activity"
 	"github.com/dedarek/agent-security-gateway/internal/agentregistry"
 	"github.com/dedarek/agent-security-gateway/internal/approval"
 	"github.com/dedarek/agent-security-gateway/internal/intel"
@@ -27,6 +28,7 @@ type Server struct {
 	Hub        *policyhub.Hub
 	Auth       *uiAuth
 	Agents     *agentregistry.Registry
+	Activity   *activity.Store
 	mu         sync.RWMutex
 	suggs      map[string]*intel.Suggestion
 	ingestAuth func(header string) bool // nil = open (dev)
@@ -42,6 +44,8 @@ func New(st *store.Store, am *approval.Manager, hub *policyhub.Hub) *Server {
 
 // SetIngestAuth enforces tenant-key auth on POST /api/ingest.
 func (s *Server) SetAgentRegistry(r *agentregistry.Registry) { s.Agents = r }
+
+func (s *Server) SetActivityStore(a *activity.Store) { s.Activity = a }
 
 func (s *Server) SetIngestAuth(f func(header string) bool) { s.ingestAuth = f }
 

@@ -17,6 +17,8 @@ var beijingDetail = time.FixedZone("CST", 8*3600)
 var secretText = regexp.MustCompile(`(?i)(bearer\s+|api[_-]?key\s*[=:]\s*|token\s*[=:]\s*|password\s*[=:]\s*|secret\s*[=:]\s*)[^\s,;]+`)
 
 // apiAgentDetail returns one registered identity plus its sessions and safe timeline.
+// It merges two sources: engine events (store.Trajectory) and hook-driven
+// activity chain (activity.Store). Timeline is engine-derived; chain is hook-derived.
 func (s *Server) apiAgentDetail(w http.ResponseWriter, r *http.Request) {
 	if s.Agents == nil {
 		http.Error(w, "agent registry unavailable", http.StatusServiceUnavailable)
@@ -54,10 +56,31 @@ func (s *Server) apiAgentDetail(w http.ResponseWriter, r *http.Request) {
 			timeline = append(timeline, safeEvent(ev, rec.Model))
 		}
 	}
+	// Activity chain from hooks (M1). Returned as separate key so UI can render
+	// the detailed tool-use chain even when no engine events exist.
+	var chain any
+	if s.Activity != nil {
+		steps := s.Activity.List(agentID)
+		// Normalize times to Beijing strings for UI
+		chainOut := make([]map[string]any, 0, len(steps))
+		for _, st := range steps {
+			chainOut = append(chainOut, map[string]any{
+				"at":         st.At.In(beijingDetail).Format("2006-01-02 15:04:05"),
+				"agent_id":   st.AgentID,
+				"session_id": st.SessionID,
+				"kind":       st.Kind,
+				"tool":       st.ToolName,
+				"summary":    st.Summary,
+				"verdict":    st.Verdict,
+			})
+		}
+		chain = chainOut
+	}
 	writeJSON(w, map[string]any{
 		"agent":         rec,
 		"sessions":      sessions,
 		"timeline":      timeline,
+		"chain":         chain,
 		"timeline_note": "请求/响应默认安全截断并脱敏；历史模型需由 Agent 在事件中上报",
 	})
 }
