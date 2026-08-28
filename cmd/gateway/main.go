@@ -173,6 +173,11 @@ func serveCmd(args []string) {
 	sensitive := engine.NewSensitiveEngine(nil, "confirm")
 	reg.Register(sensitive)
 	registerBehaviorSidecar(reg, store_, cfg)
+	registerOutputGuard(reg, cfg)
+	// Per-agent policies from DB (if sqlite enabled)
+	if dbHandle != nil {
+		reg.Register(engine.NewPolicyEngine(dbHandle))
+	}
 
 	approvals := approval.NewManager(cfg.ApprovalTimeout)
 	hub := policyhub.New(cfg.CedarPolicyPath)
@@ -215,6 +220,9 @@ func serveCmd(args []string) {
 		uiSrv.SetActivityStore(activity.New())
 	}
 	uiSrv.SetEngine(reg)
+	if dbHandle != nil {
+		webui.SetPoliciesDB(dbHandle)
+	}
 	uiSrv.SetIngestAuth(func(header string) bool {
 		_, ok := authReg.Authenticate(header)
 		return ok
@@ -238,6 +246,7 @@ func serveCmd(args []string) {
 	uiSrv.RegisterMonitorAPI(uiMux)
 	uiSrv.RegisterStatusAPI(uiMux, kgBridgeInst, mon)
 	uiSrv.RegisterPolicyAPI(uiMux)
+	uiSrv.RegisterPerAgentPolicyAPI(uiMux)
 	// OTLP/HTTP telemetry channel: OpenCode/Claude Code/Codex/OpenClaw/
 	// Hermes/Pi exporters push traces here. Visibility is decoupled from
 	// the proxy path — direct-connect models stay observable.
@@ -326,6 +335,18 @@ func registerBehaviorSidecar(reg *engine.Registry, store *session.Store, cfg con
 	}
 	reg.Register(engine.NewBehaviorEngine(cfg.BehaviorSidecarURL, store, failMode))
 	log.Printf("[axis C+] behavior.invariant sidecar at %s (failMode=%v)", cfg.BehaviorSidecarURL, failMode)
+}
+
+func registerOutputGuard(reg *engine.Registry, cfg config.Config) {
+	if cfg.OutputGuardURL == "" {
+		return
+	}
+	failMode := api.FailClosed
+	if cfg.OutputGuardFailOpen {
+		failMode = api.FailOpen
+	}
+	reg.Register(engine.NewOutputGuardEngine(cfg.OutputGuardURL, failMode))
+	log.Printf("[outputguard] llm-guard sidecar at %s (failMode=%v)", cfg.OutputGuardURL, failMode)
 }
 
 // liveForwarder adapts the long-lived upstream connection for proxy.Forwarder.

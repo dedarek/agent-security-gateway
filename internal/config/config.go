@@ -41,6 +41,10 @@ type Config struct {
 	BehaviorSidecarURL string `yaml:"behavior_sidecar_url"`
 	BehaviorFailOpen   bool   `yaml:"behavior_fail_open"`
 
+	// Output guard (llm-guard). Empty => engine disabled.
+	OutputGuardURL      string `yaml:"outputguard_sidecar_url"`
+	OutputGuardFailOpen bool   `yaml:"outputguard_fail_open"`
+
 	// Operations: event log (JSONL) for the Intelligence plane, operator UI
 	// listener, approval timeout, multi-tenant registry file.
 	EventLogPath    string        `yaml:"event_log_path"`
@@ -85,6 +89,10 @@ func Default() Config {
 			AuditMaxMB:   64,
 			AuditKeep:    5,
 		},
+		BehaviorSidecarURL:    "http://127.0.0.1:8901",
+		BehaviorFailOpen:      true,
+		OutputGuardURL:        "http://127.0.0.1:8903",
+		OutputGuardFailOpen:   true,
 		KGPythonBin:              "./.venv-kg/bin/python",
 		KGWorkerScript:           "internal/kgbridge/asg_kg_worker.py",
 		KGSemanticaPath:          "", // set to semantica checkout if used

@@ -26,6 +26,9 @@ include_experimental_rules: false
 behavior_sidecar_url: "http://127.0.0.1:8901"
 behavior_fail_open: true
 
+outputguard_sidecar_url: "http://127.0.0.1:8903"
+outputguard_fail_open: true
+
 # Storage: SQLite as primary, JSONL retained as audit log.
 storage:
   driver: sqlite
