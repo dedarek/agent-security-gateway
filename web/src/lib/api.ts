@@ -51,4 +51,8 @@ export const api = {
   judgeFindings: () => get<any>('/api/judge/findings'),
   monitorFindings: () => get<any>('/api/monitor/findings'),
   status: () => get<any>('/api/status'),
+  approvals: () => get<any[]>('/api/approvals'),
+  suggestions: () => get<any[]>('/api/suggestions'),
+  trajectory: (session: string) => get<any>(`/api/trajectory?session=${encodeURIComponent(session)}`),
+  kgPath: (source: string, target: string) => get<any>(`/api/kg/graph/path?source=${encodeURIComponent(source)}&target=${encodeURIComponent(target)}`),
 }

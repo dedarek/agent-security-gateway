@@ -1,451 +1,310 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import cytoscape from 'cytoscape'
 import { api } from '../lib/api'
-
-type KGNode = {
-  id: string
-  type: string
-  content: string
-  properties: Record<string, any>
-}
-type KGEdge = {
-  source: string
-  target: string
-  type: string
-  weight: number
-}
+import { buildRiskSubgraph, type GraphMode, type KGNode, type KGEdge } from '../lib/graphModel'
+import { Drawer } from './Drawer'
+import { VerdictBadge } from './VerdictBadge'
+import { Skeleton } from './Skeleton'
 
 const TYPE_COLOR: Record<string, string> = {
-  Agent: '#4a9eff',
-  Tool: '#e8a317',
-  Event: '#8092a6',
-  Trace: '#9a7fd1',
-  ExternalActor: '#e15a4a',
+  Agent: '#f5a623',
+  Tool: '#4a9bd4',
+  Event: '#5f7183',
+  ExternalActor: '#ff5f56',
 }
-
 const TYPE_SHAPE: Record<string, string> = {
   Agent: 'ellipse',
   Tool: 'round-rectangle',
   Event: 'round-rectangle',
-  Trace: 'diamond',
   ExternalActor: 'hexagon',
 }
 
-function shortLabel(id: string, content: string, max = 22): string {
+function shortLabel(id: string, content: string, max = 20): string {
   const raw = content || id
-  // evt:hook-xxx -> hook-xxx, agent:@xxx -> @xxx
-  const cleaned = raw.replace(/^evt:/, '').replace(/^agent:@/, '@').replace(/^trace:/, '').replace(/^tool:/, '')
+  const cleaned = raw.replace(/^evt:/, '').replace(/^agent:@?/, '@').replace(/^tool:/, '')
   return cleaned.length > max ? cleaned.slice(0, max) + '…' : cleaned
 }
 
-export default function KGGraph() {
+const MODES: { id: GraphMode; label: string }[] = [
+  { id: 'risk', label: '风险' },
+  { id: 'review', label: '审查' },
+  { id: 'full', label: '全量' },
+]
+
+export default function KGGraph({ focus }: { focus?: string }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const cyRef = useRef<cytoscape.Core | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
-  const [showAll, setShowAll] = useState(false)
-  const [stats, setStats] = useState<{ nodes: number; edges: number; filtered: number } | null>(null)
-  const [selected, setSelected] = useState<string | null>(null)
+  const [mode, setMode] = useState<GraphMode>('risk')
+  const [stats, setStats] = useState<{ shown: number; rawNodes: number; omitted: number; edges: number } | null>(null)
+  const [selected, setSelected] = useState<KGNode | null>(null)
+  const [tracing, setTracing] = useState(false)
   const rawRef = useRef<{ nodes: KGNode[]; edges: KGEdge[] } | null>(null)
+  const nodeById = useRef<Map<string, KGNode>>(new Map())
 
-  const buildElements = useCallback((nodes: KGNode[], edges: KGEdge[], all: boolean) => {
-    // verdict map from node properties
-    const verdictById = new Map<string, string>()
-    nodes.forEach(n => {
-      const v = n.properties?.verdict || ''
-      if (v) verdictById.set(n.id, v)
-    })
-
-    // filtering: keep Agent/Tool/ExternalActor + their 1-hop neighbors
-    let keepIds: Set<string> | null = null
-    if (!all) {
-      const coreTypes = new Set(['Agent', 'Tool', 'ExternalActor'])
-      const coreIds = new Set(nodes.filter(n => coreTypes.has(n.type)).map(n => n.id))
-      keepIds = new Set(coreIds)
-      edges.forEach(e => {
-        if (coreIds.has(e.source)) keepIds!.add(e.target)
-        if (coreIds.has(e.target)) keepIds!.add(e.source)
-      })
-      // If still too small, fallback to showAll
-      if (keepIds.size < 20) keepIds = null
-    }
-
-    const filteredNodes = keepIds ? nodes.filter(n => keepIds!.has(n.id)) : nodes
-    const filteredIds = new Set(filteredNodes.map(n => n.id))
-    const filteredEdges = edges.filter(e => filteredIds.has(e.source) && filteredIds.has(e.target))
-
-    // include BLOCK nodes even if filtered out (always keep BLOCK for demo)
-    // if filtering removed all BLOCK nodes, add them back
-    if (keepIds) {
-      const blocks = nodes.filter(n => n.properties?.verdict === 'BLOCK' && !filteredIds.has(n.id))
-      blocks.forEach(b => {
-        filteredNodes.push(b)
-        filteredIds.add(b.id)
-        // add edges incident to this BLOCK node where other end already in set
-        edges.forEach(e => {
-          if ((e.source === b.id && filteredIds.has(e.target)) || (e.target === b.id && filteredIds.has(e.source))) {
-            if (!filteredEdges.find(fe => fe.source === e.source && fe.target === e.target)) {
-              filteredEdges.push(e)
-            }
-          }
-        })
-      })
-    }
-
-    const cyNodes = filteredNodes.map(n => {
-      const verdict = n.properties?.verdict || ''
-      const isBlock = verdict === 'BLOCK'
-      return {
-        data: {
-          id: n.id,
-          label: shortLabel(n.id, n.content),
-          fullLabel: n.content || n.id,
-          type: n.type,
-          verdict,
-          risk: n.properties?.risk ?? 0,
-          color: TYPE_COLOR[n.type] || '#8092a6',
-          shape: TYPE_SHAPE[n.type] || 'ellipse',
-          isBlock,
-        },
-      }
-    })
-
-    const cyEdges = filteredEdges.map((e, i) => {
-      const targetVerdict = verdictById.get(e.target) || ''
-      const sourceVerdict = verdictById.get(e.source) || ''
-      const isBlock = targetVerdict === 'BLOCK' || sourceVerdict === 'BLOCK'
-      return {
-        data: {
-          id: `e${i}-${e.source}-${e.target}`,
-          source: e.source,
-          target: e.target,
-          type: e.type,
-          verdict: isBlock ? 'BLOCK' : '',
-          isBlock,
-          label: e.type,
-        },
-      }
-    })
-
-    return {
-      elements: [...cyNodes, ...cyEdges],
-      filteredCount: filteredNodes.length,
-      totalEdges: filteredEdges.length,
-    }
-  }, [])
-
-  const render = useCallback(async (all: boolean) => {
+  const render = useCallback(async (m: GraphMode) => {
     if (!containerRef.current) return
     setLoading(true)
     setErr(null)
     try {
-      let nodesRes: any, edgesRes: any
-      if (rawRef.current) {
-        nodesRes = { nodes: rawRef.current.nodes }
-        edgesRes = { edges: rawRef.current.edges }
-      } else {
+      if (!rawRef.current) {
         const [nr, er] = await Promise.all([api.kgNodes(), api.kgEdges()])
-        const n = (nr as any).nodes || (nr as any) || []
-        const e = (er as any).edges || (er as any) || []
-        nodesRes = { nodes: Array.isArray(n) ? n : [] }
-        edgesRes = { edges: Array.isArray(e) ? e : [] }
-        rawRef.current = { nodes: nodesRes.nodes, edges: edgesRes.edges }
+        const n = Array.isArray((nr as any)?.nodes) ? (nr as any).nodes : Array.isArray(nr) ? nr : []
+        const e = Array.isArray((er as any)?.edges) ? (er as any).edges : Array.isArray(er) ? er : []
+        rawRef.current = { nodes: n, edges: e }
+        nodeById.current = new Map(n.map((x: KGNode) => [x.id, x]))
       }
+      const { nodes, edges, stats } = buildRiskSubgraph(rawRef.current.nodes, rawRef.current.edges, m)
+      setStats({ shown: stats.shown, rawNodes: stats.rawNodes, omitted: stats.omitted, edges: edges.length })
 
-      const { elements, filteredCount, totalEdges } = buildElements(rawRef.current!.nodes, rawRef.current!.edges, all)
-      setStats({ nodes: rawRef.current!.nodes.length, edges: rawRef.current!.edges.length, filtered: filteredCount })
+      if (cyRef.current) { cyRef.current.destroy(); cyRef.current = null }
 
-      // destroy old
-      if (cyRef.current) {
-        cyRef.current.destroy()
-        cyRef.current = null
-      }
+      const cyNodes = nodes.map((n) => {
+        const verdict = String(n.properties?.verdict || '')
+        const risk = Number(n.properties?.risk || 0)
+        const isBlock = verdict === 'BLOCK'
+        const size = n.type === 'Event' ? (isBlock ? 30 + Math.min(risk / 4, 22) : verdict === 'CONFIRM' ? 34 : 26)
+          : n.type === 'Agent' ? 52 : n.type === 'Tool' ? 46 : 40
+        return {
+          data: {
+            id: n.id,
+            label: shortLabel(n.id, n.content || ''),
+            fullLabel: n.content || n.id,
+            type: n.type,
+            verdict,
+            risk,
+            isBlock,
+            size,
+            color: isBlock ? '#ff5f56' : verdict === 'CONFIRM' ? '#f5a623' : (TYPE_COLOR[n.type] || '#5f7183'),
+            shape: TYPE_SHAPE[n.type] || 'ellipse',
+          },
+        }
+      })
+      const cyEdges = edges.map((e, i) => {
+        const sv = String(nodeById.current.get(e.source)?.properties?.verdict || '')
+        const tv = String(nodeById.current.get(e.target)?.properties?.verdict || '')
+        const isBlock = sv === 'BLOCK' || tv === 'BLOCK'
+        return { data: { id: `e${i}`, source: e.source, target: e.target, label: e.type || '', isBlock } }
+      })
 
       const cy = cytoscape({
         container: containerRef.current,
-        elements,
+        elements: [...cyNodes, ...cyEdges],
         layout: {
-          name: 'cose',
-          idealEdgeLength: 80,
-          nodeOverlap: 12,
-          refresh: 20,
-          fit: true,
-          padding: 30,
-          randomize: false,
-          componentSpacing: 40,
-          nodeRepulsion: () => 450000,
-          edgeElasticity: () => 100,
-          nestingFactor: 1.2,
-          gravity: 80,
-          numIter: 1000,
-          initialTemp: 200,
-          coolingFactor: 0.95,
-          minTemp: 1.0,
+          name: 'cose', animate: true, animationDuration: 400,
+          idealEdgeLength: 90, nodeOverlap: 14, refresh: 20, fit: true, padding: 36,
+          randomize: false, componentSpacing: 60,
+          nodeRepulsion: () => 480000, edgeElasticity: () => 120,
+          nestingFactor: 1.2, gravity: 90, numIter: 900, initialTemp: 180, coolingFactor: 0.95, minTemp: 1.0,
         } as any,
         style: [
-          {
-            selector: 'node',
-            style: {
-              'background-color': 'data(color)',
-              'label': 'data(label)',
-              'color': '#e6ebf2',
-              'font-size': 7,
-              'text-valign': 'center',
-              'text-halign': 'center',
-              'text-wrap': 'wrap',
-              'text-max-width': 70,
-              'width': 42,
-              'height': 42,
-              'border-width': 2,
-              'border-color': '#1a2430',
-              'shape': 'data(shape)',
-              'overlay-opacity': 0,
-            } as any,
-          },
-          {
-            selector: 'node[type="Agent"]',
-            style: { 'width': 48, 'height': 48, 'font-size': 7, 'font-weight': 600 } as any,
-          },
-          {
-            selector: 'node[type="Tool"]',
-            style: { 'width': 52, 'height': 32, 'font-size': 7 } as any,
-          },
-          {
-            selector: 'node[type="Event"]',
-            style: { 'width': 38, 'height': 38, 'font-size': 6, 'background-color': '#5a6a7e' } as any,
-          },
-          {
-            selector: 'node[type="Trace"]',
-            style: { 'width': 30, 'height': 30, 'font-size': 6 } as any,
-          },
-          {
-            selector: 'node[type="ExternalActor"]',
-            style: { 'width': 50, 'height': 50, 'border-width': 3, 'border-color': '#e15a4a' } as any,
-          },
-          {
-            selector: 'node[verdict="BLOCK"]',
-            style: { 'border-width': 3, 'border-color': '#e5484d', 'background-color': '#e5484d' } as any,
-          },
-          {
-            selector: 'edge',
-            style: {
-              'width': 1.2,
-              'line-color': '#2e3c4e',
-              'target-arrow-color': '#2e3c4e',
-              'target-arrow-shape': 'triangle',
-              'curve-style': 'bezier',
-              'label': 'data(label)',
-              'font-size': 6,
-              'color': '#5a6a7e',
-              'text-rotation': 'autorotate',
-              'arrow-scale': 0.8,
-              'opacity': 0.85,
-            } as any,
-          },
-          {
-            selector: 'edge[verdict="BLOCK"]',
-            style: { 'line-color': '#e5484d', 'target-arrow-color': '#e5484d', 'width': 2.5, 'opacity': 1 } as any,
-          },
-          {
-            selector: '.hl',
-            style: { 'opacity': 1, 'z-index': 10 } as any,
-          },
-          {
-            selector: 'node.hl',
-            style: { 'border-width': 3, 'border-color': '#e8a317', 'background-color': '#e8a317', 'color': '#0d1116', 'z-index': 20 } as any,
-          },
-          {
-            selector: 'node.hl[verdict="BLOCK"]',
-            style: { 'background-color': '#e5484d', 'border-color': '#ff6b6b' } as any,
-          },
-          {
-            selector: 'edge.hl',
-            style: { 'line-color': '#e8a317', 'target-arrow-color': '#e8a317', 'width': 3, 'opacity': 1 } as any,
-          },
-          {
-            selector: 'edge.hl[verdict="BLOCK"]',
-            style: { 'line-color': '#e5484d', 'target-arrow-color': '#e5484d', 'width': 3.5 } as any,
-          },
-          {
-            selector: '.dim',
-            style: { 'opacity': 0.15 } as any,
-          },
-          {
-            selector: 'node:selected',
-            style: { 'border-width': 3, 'border-color': '#e8a317' } as any,
-          },
+          { selector: 'node', style: {
+            'background-color': 'data(color)', 'label': 'data(label)', 'color': '#e6ebf2',
+            'font-size': 8, 'text-valign': 'bottom', 'text-halign': 'center', 'text-margin-y': 4,
+            'text-wrap': 'wrap', 'text-max-width': 90, 'width': 'data(size)', 'height': 'data(size)',
+            'border-width': 2, 'border-color': '#0b0f14', 'shape': 'data(shape)', 'overlay-opacity': 0,
+          } as any },
+          { selector: 'node[isBlock]', style: {
+            'border-width': 3, 'border-color': '#ff5f56',
+            'shadow-blur': 18, 'shadow-color': '#ff5f56', 'shadow-opacity': 0.5,
+          } as any },
+          { selector: 'edge', style: {
+            'width': 1.2, 'line-color': '#2e3c4e', 'target-arrow-color': '#2e3c4e',
+            'target-arrow-shape': 'triangle', 'curve-style': 'bezier', 'font-size': 6,
+            'label': '', 'arrow-scale': 0.8, 'opacity': 0.8,
+          } as any },
+          { selector: 'edge[isBlock]', style: {
+            'line-color': '#ff5f56', 'target-arrow-color': '#ff5f56', 'width': 2.4, 'opacity': 1,
+            'line-style': 'dashed', 'line-dash-pattern': [6, 3],
+          } as any },
+          { selector: '.hl', style: { 'opacity': 1, 'z-index': 10 } as any },
+          { selector: 'node.hl', style: { 'border-width': 3, 'border-color': '#f5a623', 'z-index': 20 } as any },
+          { selector: 'edge.hl', style: { 'line-color': '#f5a623', 'target-arrow-color': '#f5a623', 'width': 3, 'opacity': 1 } as any },
+          { selector: '.dim', style: { 'opacity': 0.13 } as any },
+          { selector: 'node:selected', style: { 'border-width': 3, 'border-color': '#f5a623' } as any },
         ],
-        wheelSensitivity: 0.2,
-        minZoom: 0.15,
-        maxZoom: 4,
+        wheelSensitivity: 0.2, minZoom: 0.12, maxZoom: 4,
       })
 
-      // --- taint path highlight: click node -> BFS upstream + sibling expansion ---
+      // click node → BFS upstream highlight + drawer
       cy.on('tap', 'node', (evt) => {
         const target = evt.target
         const startId = target.id()
-        setSelected(startId)
+        setSelected(nodeById.current.get(startId) || null)
 
-        // build reverse + forward adjacency from current elements
-        const edgeData = cy.edges().map(e => ({ source: e.data('source'), target: e.data('target'), id: e.id() }))
-        const rev = new Map<string, string[]>() // target -> sources
-        const fwd = new Map<string, string[]>() // source -> targets
-        const edgeByPair = new Map<string, string>() // source|target -> edge id
-        edgeData.forEach(ed => {
+        const edgeData = cy.edges().map((e) => ({ source: e.data('source'), target: e.data('target'), id: e.id() }))
+        const rev = new Map<string, string[]>()
+        const fwd = new Map<string, string[]>()
+        const edgeByPair = new Map<string, string>()
+        edgeData.forEach((ed) => {
           if (!rev.has(ed.target)) rev.set(ed.target, [])
           rev.get(ed.target)!.push(ed.source)
           if (!fwd.has(ed.source)) fwd.set(ed.source, [])
           fwd.get(ed.source)!.push(ed.target)
           edgeByPair.set(`${ed.source}|${ed.target}`, ed.id)
         })
-
         const visited = new Set<string>([startId])
         const q: string[] = [startId]
         const pathEdgeIds = new Set<string>()
         while (q.length) {
           const cur = q.shift()!
-          const preds = rev.get(cur) || []
-          for (const p of preds) {
-            const key = `${p}|${cur}`
-            const eid = edgeByPair.get(key)
+          for (const p of rev.get(cur) || []) {
+            const eid = edgeByPair.get(`${p}|${cur}`)
             if (eid) pathEdgeIds.add(eid)
-            if (!visited.has(p)) {
-              visited.add(p)
-              q.push(p)
-            }
+            if (!visited.has(p)) { visited.add(p); q.push(p) }
           }
         }
-        // Expand via Agent: if upstream hit an Agent, also highlight all events that Agent performed (sibling taint chain)
-        const agentsInPath = [...visited].filter(id => {
-          const n = cy.getElementById(id)
-          return n.length && n.data('type') === 'Agent'
-        })
-        agentsInPath.forEach(agentId => {
-          const outs = fwd.get(agentId) || []
-          outs.forEach(tid => {
-            const key = `${agentId}|${tid}`
-            const eid = edgeByPair.get(key)
+        // sibling expansion via Agent
+        const agentsInPath = [...visited].filter((id) => cy.getElementById(id).data('type') === 'Agent')
+        agentsInPath.forEach((agentId) => {
+          for (const tid of fwd.get(agentId) || []) {
+            const eid = edgeByPair.get(`${agentId}|${tid}`)
             if (eid) pathEdgeIds.add(eid)
             visited.add(tid)
-            // also include Tool used by those events (forward one more hop)
-            const second = fwd.get(tid) || []
-            second.forEach(tid2 => {
-              const k2 = `${tid}|${tid2}`
-              const eid2 = edgeByPair.get(k2)
+            for (const tid2 of fwd.get(tid) || []) {
+              const eid2 = edgeByPair.get(`${tid}|${tid2}`)
               if (eid2) pathEdgeIds.add(eid2)
               visited.add(tid2)
-            })
-          })
+            }
+          }
         })
 
         cy.elements().removeClass('hl dim')
         cy.elements().addClass('dim')
-        visited.forEach(id => {
-          const n = cy.getElementById(id)
-          if (n.length) n.removeClass('dim').addClass('hl')
-        })
-        pathEdgeIds.forEach(eid => {
-          const e = cy.getElementById(eid)
-          if (e.length) e.removeClass('dim').addClass('hl')
-        })
-        // ensure clicked node is hl
+        visited.forEach((id) => { const n = cy.getElementById(id); if (n.length) n.removeClass('dim').addClass('hl') })
+        pathEdgeIds.forEach((eid) => { const e = cy.getElementById(eid); if (e.length) e.removeClass('dim').addClass('hl') })
         target.removeClass('dim').addClass('hl')
       })
 
       cy.on('tap', (evt) => {
-        if (evt.target === cy) {
-          cy.elements().removeClass('hl dim')
-          setSelected(null)
-        }
+        if (evt.target === cy) { cy.elements().removeClass('hl dim'); setSelected(null) }
       })
 
       cyRef.current = cy
       ;(window as any)._cy = cy
-      // expose for e2e taint highlight test
-      ;(window as any).__highlightBlock = () => {
-        // prefer the known audit-chain BLOCK (real attack chain: Read credentials -> http_post BLOCK)
-        const preferred = cy.getElementById('evt:hook-1787900385759141700')
-        const n = preferred.length ? preferred : cy.nodes('[verdict="BLOCK"]')[0]
-        if (!n || !n.length) return 'no-block'
-        n.emit('tap')
-        return n.id()
-      }
       setLoading(false)
+
+      // auto-focus from deep link (?focus=session_id): highlight first matching event
+      if (focus) {
+        const hit = cy.nodes().toArray().find((n) => n.id().includes(focus))
+        if (hit) { hit.emit('tap'); cy.center(hit) }
+      }
     } catch (e: any) {
       setErr(e?.message || String(e))
       setLoading(false)
     }
-  }, [buildElements])
+  }, [focus])
 
   useEffect(() => {
-    render(showAll)
-    return () => {
-      if (cyRef.current) {
-        cyRef.current.destroy()
-        cyRef.current = null
-      }
-    }
-  }, [render, showAll])
+    render(mode)
+    return () => { if (cyRef.current) { cyRef.current.destroy(); cyRef.current = null } }
+  }, [render, mode])
 
   const handleReset = () => {
-    if (cyRef.current) {
-      cyRef.current.elements().removeClass('hl dim')
-      cyRef.current.fit(undefined, 30)
-      setSelected(null)
-    }
+    cyRef.current?.elements().removeClass('hl dim')
+    cyRef.current?.fit(undefined, 36)
+    setSelected(null)
   }
 
-  const handleFit = () => {
-    cyRef.current?.fit(undefined, 30)
+  // Trace-to-source: pick the lowest-risk *source* node among highlighted
+  // upstream and call /api/kg/graph/path to draw the full shortest lineage.
+  const handleTrace = async () => {
+    if (!selected || !cyRef.current) return
+    setTracing(true)
+    try {
+      const cy = cyRef.current
+      const hl = cy.nodes('.hl').toArray()
+      // find a plausible source: Agent/Tool nodes in the highlighted upstream
+      const sourceNode = hl.find((n) => n.data('type') === 'Agent') || hl[hl.length - 1]
+      if (!sourceNode) return
+      const res: any = await api.kgPath(sourceNode.id(), selected.id)
+      const path: string[] = res?.path || res?.nodes?.map((n: any) => n.id) || []
+      if (path.length) {
+        cy.elements().removeClass('hl dim')
+        cy.elements().addClass('dim')
+        path.forEach((id) => { const n = cy.getElementById(id); if (n.length) n.removeClass('dim').addClass('hl') })
+        // highlight edges along the path
+        for (let i = 0; i < path.length - 1; i++) {
+          const a = path[i]; const b = path[i + 1]
+          cy.edges().toArray().forEach((e) => {
+            const s = e.data('source'); const t = e.data('target')
+            if ((s === a && t === b) || (s === b && t === a)) e.removeClass('dim').addClass('hl')
+          })
+        }
+      }
+    } catch { /* path may not exist — keep BFS highlight */ }
+    setTracing(false)
   }
 
   return (
-    <div style={{ padding: 24 }}>
-      <h1 style={{ fontSize: 18, fontWeight: 700 }}>本体论图谱</h1>
-      <p style={{ color: '#8092a6', fontSize: 12, marginBottom: 12 }}>
-        Cytoscape.js 真渲染 · {stats ? `${stats.nodes} 节点 / ${stats.edges} 边 · 当前显示 ${stats.filtered}` : '加载中…'} · 点击节点溯源 taint 路径，BLOCK 红色 #e5484d
-      </p>
-
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#c9d3de', cursor: 'pointer' }}>
-          <input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} />
-          显示全部（{stats?.nodes ?? 500} 节点，723+ 边，可能卡顿）
-        </label>
-        <button onClick={handleReset} style={{ padding: '6px 12px', background: '#1a2430', border: '1px solid #232d3b', borderRadius: 6, color: '#e6ebf2', cursor: 'pointer', fontSize: 12 }}>重置高亮</button>
-        <button onClick={handleFit} style={{ padding: '6px 12px', background: '#1a2430', border: '1px solid #232d3b', borderRadius: 6, color: '#e6ebf2', cursor: 'pointer', fontSize: 12 }}>居中适配</button>
-        <span style={{ fontSize: 11, color: '#8092a6', marginLeft: 8 }}>
-          {selected ? <>已选 <code style={{ background: '#1a2430', padding: '1px 4px', borderRadius: 4 }}>{selected.slice(0, 32)}</code> · 上游链路已高亮</> : '点击任意节点查看上游 taint 链 · 空白处重置'}
-        </span>
-        <span style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center', fontSize: 11 }}>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 10, height: 10, background: '#4a9eff', borderRadius: 2, display: 'inline-block' }} /> Agent</span>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 10, height: 10, background: '#e8a317', borderRadius: 2, display: 'inline-block' }} /> Tool</span>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 10, height: 10, background: '#8092a6', borderRadius: 2, display: 'inline-block' }} /> Event</span>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 10, height: 10, background: '#9a7fd1', borderRadius: 2, display: 'inline-block' }} /> Trace</span>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 10, height: 10, background: '#e5484d', borderRadius: 2, display: 'inline-block' }} /> BLOCK</span>
-        </span>
+    <div style={{ padding: '16px 22px', display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+      <div className="row-between" style={{ marginBottom: 10, flexWrap: 'wrap', gap: 10 }}>
+        <div className="row" style={{ gap: 12 }}>
+          <div className="seg">
+            {MODES.map((x) => (
+              <button key={x.id} className={`seg-item ${mode === x.id ? 'on' : ''}`} onClick={() => setMode(x.id)}>{x.label}</button>
+            ))}
+          </div>
+          <span className="small dim">
+            {stats ? `显示 ${stats.shown} / ${stats.rawNodes} 节点 · ${stats.edges} 边${stats.omitted > 0 ? ` · 已省略 ${stats.omitted} 个低风险` : ''}` : '加载中…'}
+          </span>
+        </div>
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn" onClick={handleReset}>重置高亮</button>
+          <button className="btn" onClick={() => cyRef.current?.fit(undefined, 36)}>居中适配</button>
+          <span className="row small dim" style={{ gap: 10 }}>
+            <Legend c="#f5a623" t="Agent" /><Legend c="#4a9bd4" t="Tool" />
+            <Legend c="#5f7183" t="Event" /><Legend c="#ff5f56" t="BLOCK" />
+          </span>
+        </div>
       </div>
 
-      {err && <div style={{ padding: 12, background: '#2a1a1a', border: '1px solid #e5484d', borderRadius: 8, color: '#e6ebf2', marginBottom: 12, fontSize: 12 }}>加载失败: {err} · 请确认 kgbridge (8902) 与 gateway (8090) 运行中</div>}
-
-      <div
-        ref={containerRef}
-        style={{
-          height: 560,
-          background: '#0f141c',
-          borderRadius: 8,
-          border: '1px solid #232d3b',
-          position: 'relative',
-          overflow: 'hidden',
-        }}
-      />
-      {loading && (
-        <div style={{ position: 'relative', marginTop: -560, height: 560, display: 'grid', placeItems: 'center', pointerEvents: 'none', color: '#8092a6', background: 'rgba(15,20,28,0.6)', borderRadius: 8 }}>
-          布局计算中…（cose, 500 节点首次约 1–2s）
+      {mode === 'full' && (
+        <div className="card card-pad small" style={{ marginBottom: 10, borderColor: 'rgba(245,166,35,.35)', background: 'rgba(245,166,35,.06)', color: 'var(--confirm)' }}>
+          全量档节点较多，可能卡顿；「风险」档只展示 BLOCK 及其上游链，是日常追溯的推荐视图。
         </div>
       )}
-      <div style={{ fontSize: 11, color: '#5a6a7e', marginTop: 8 }}>
-        拖拽节点 · 滚轮缩放 · 点击节点高亮上游 taint 链（BFS upstream, dim 0.15 / hl 不透明） · BLOCK 边 #e5484d 红色加粗
+      {err && (
+        <div className="card card-pad small" style={{ marginBottom: 10, borderColor: 'rgba(255,95,86,.4)', background: 'rgba(255,95,86,.08)', color: 'var(--block)' }}>
+          加载失败: {err} · 请确认 kgbridge (8902) 与 gateway (8090) 运行中
+        </div>
+      )}
+
+      <div ref={containerRef} style={{ flex: 1, minHeight: 420, background: 'var(--bg-1)', borderRadius: 'var(--r-m)', border: '1px solid var(--line)', overflow: 'hidden' }} />
+      {loading && <Skeleton h={420} style={{ marginTop: -420, borderRadius: 'var(--r-m)' }} />}
+
+      <div className="small dim" style={{ marginTop: 8 }}>
+        拖拽 · 滚轮缩放 · 点击节点高亮上游 taint 链 · BLOCK 节点带红色外发光，taint 边为红色流动虚线
       </div>
+
+      <Drawer open={!!selected} onClose={() => setSelected(null)}
+        title={selected ? <span className="row" style={{ gap: 8 }}><VerdictBadge v={selected.properties?.verdict} /> {shortLabel(selected.id, selected.content || '', 30)}</span> : ''}>
+        {selected && (
+          <div className="col" style={{ gap: 14 }}>
+            <dl className="kv">
+              <dt>ID</dt><dd className="mono">{selected.id}</dd>
+              <dt>类型</dt><dd>{selected.type}</dd>
+              <dt>裁决</dt><dd><VerdictBadge v={selected.properties?.verdict} /></dd>
+              <dt>风险分</dt><dd>{selected.properties?.risk ?? 0}</dd>
+            </dl>
+            {selected.properties?.rationale && (
+              <div className="card card-pad">
+                <div className="h-sec" style={{ marginBottom: 6 }}>判定理由</div>
+                <div className="small" style={{ wordBreak: 'break-all' }}>{selected.properties.rationale}</div>
+              </div>
+            )}
+            <button className="btn btn-primary" disabled={tracing} onClick={handleTrace}>
+              {tracing ? '追溯中…' : '追溯到源头 →'}
+            </button>
+            <div className="small dim">调用 /api/kg/graph/path 画出从敏感源到该事件的完整最短血缘路径。</div>
+          </div>
+        )}
+      </Drawer>
     </div>
   )
+}
+
+function Legend({ c, t }: { c: string; t: string }) {
+  return <span className="row" style={{ gap: 4 }}><span style={{ width: 9, height: 9, background: c, borderRadius: 2, display: 'inline-block' }} />{t}</span>
 }
