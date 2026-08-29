@@ -250,6 +250,7 @@ func serveCmd(args []string) {
 	uiSrv.RegisterPerAgentPolicyAPI(uiMux)
 	uiSrv.RegisterStreamAPI(uiMux)
 	uiSrv.RegisterStatsAPI(uiMux)
+	uiSrv.RegisterOntoAPI(uiMux)
 	// OTLP/HTTP telemetry channel: OpenCode/Claude Code/Codex/OpenClaw/
 	// Hermes/Pi exporters push traces here. Visibility is decoupled from
 	// the proxy path — direct-connect models stay observable.
