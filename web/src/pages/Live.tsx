@@ -31,6 +31,18 @@ export default function Live() {
   const [filter, setFilter] = useState<Filter>(null)
   const [spark, setSpark] = useState<number[]>(() => Array(30).fill(0))
 
+  // First-paint backfill: SSE only pushes NEW events, so without seeding the
+  // stream the feed renders empty until the next tool call. Seed from the
+  // recent-events API once on load; SSE then prepends live on top.
+  const { data: seedEvents } = useQuery({ queryKey: ['events-seed'], queryFn: api.events, staleTime: Infinity, refetchOnWindowFocus: false })
+  useEffect(() => {
+    if (!seedEvents) return
+    setSteps((prev) => {
+      if (prev.length > 0) return prev // SSE already delivered live steps
+      return (seedEvents as any[]).slice(0, 80).map(eventToStep)
+    })
+  }, [seedEvents])
+
   const streamStatus = useEventStream((step) => {
     setSteps((prev) => [step, ...prev].slice(0, 200))
     // bump the current minute bucket on the sparkline
@@ -51,6 +63,11 @@ export default function Live() {
   const active = list.filter((a) => a.status === 'active')
   const idle = list.filter((a) => a.status === 'idle')
   const online = active.length + idle.length
+  const onlineIds = useMemo(
+    () => new Set([...active, ...idle].map((a) => a.agent_id)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [JSON.stringify([...active, ...idle].map((a) => a.agent_id))],
+  )
 
   const v = stats?.verdict || {}
   const blocks = v.block ?? 0
@@ -58,8 +75,12 @@ export default function Live() {
   const allows = v.allow ?? 0
   const kg = status?.kg || {}
 
-  // threat score: block heavy, confirm light, over the recent window
-  const threat = Math.min(100, blocks * 10 + confirms * 2)
+  // Threat score must reflect what ONLINE agents are doing, not the whole
+  // history window — otherwise stale test agents pin the gauge at 100 and it
+  // cries wolf. Score only per-agent rollups for currently online agents.
+  const threat = Math.min(100, (stats?.per_agent || [])
+    .filter((a: any) => onlineIds.has(a.agent_id))
+    .reduce((sum: number, a: any) => sum + a.block * 10 + a.confirm * 2, 0))
 
   // top risky agents from per_agent rollup
   const riskAgents: any[] = (stats?.per_agent || []).filter((a: any) => a.score > 0).slice(0, 5)
@@ -235,4 +256,25 @@ export default function Live() {
       </Drawer>
     </div>
   )
+}
+
+// eventToStep projects a raw /api/events record into the StreamStep shape the
+// feed and breakdown consume. Best-effort; missing fields degrade to '-'.
+function eventToStep(e: any): StreamStep {
+  const d = e?.Decision || {}
+  return {
+    at: e?.Timestamp || e?.Call?.Timestamp || '',
+    agent_id: e?.Call?.Principal?.AgentID || e?.Call?.Principal?.UserID || '-',
+    session_id: e?.Call?.Principal?.SessionID || e?.session_id || '',
+    kind: 'tool_use',
+    tool_name: e?.Call?.ToolID || '?',
+    summary: d?.Rationale ? String(d.Rationale).slice(0, 160) : '',
+    verdict: typeof d?.Final === 'string' ? d.Final : verdictName(d?.Final),
+    reason: d?.Rationale,
+  }
+}
+
+function verdictName(v: number | string | undefined): string {
+  if (typeof v === 'string') return v
+  return ['ALLOW', 'LOG', 'ALERT', 'CONFIRM', 'BLOCK', 'REDACT'][v ?? 0] || 'ALLOW'
 }
