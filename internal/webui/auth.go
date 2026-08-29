@@ -59,13 +59,39 @@ func (a *uiAuth) valid(tok string) bool {
 	return true
 }
 
-// middleware wraps console handlers: requires a session token unless the
-// request originated from the loopback interface AND no tunnel is involved.
-// When ASG_PUBLIC=1 (or a forwarded header is present), even loopback must
-// authenticate — cpolar/ngrok-style tunnels make loopback the public entry.
+// readOnlyPaths are safe for anonymous public viewers (console reads, graphs,
+// activity). Everything else — especially anything that mutates — still needs
+// the admin session. This powers the "免密只读公网" mode.
+var readOnlyPaths = []string{
+	"/api/agents", "/api/status", "/api/stats/", "/api/onto/", "/api/kg/",
+	"/api/events", "/api/sessions", "/api/trajectory", "/api/judge/findings",
+	"/api/monitor/findings", "/api/clusters", "/api/stream",
+}
+
+func isReadOnlyPath(p string) bool {
+	for _, pre := range readOnlyPaths {
+		if strings.HasPrefix(p, pre) {
+			return true
+		}
+	}
+	return false
+}
+
+// middleware wraps console handlers. Public (tunneled) requests get read-only
+// access for GET on safe paths — enough for a demo viewer to browse the
+// console — while any mutation or non-GET requires the admin session. Local
+// loopback (no tunnel) stays fully open as before.
 func (a *uiAuth) middleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !a.isLocalOnly(r) {
+			// public/remote: static assets (they carry a dot) + read-only GETs
+			// are open so the console shell loads and read views work for an
+			// anonymous viewer. Data writes and non-GET still need the session.
+			isStatic := strings.Contains(r.URL.Path, ".") && !strings.HasPrefix(r.URL.Path, "/api/")
+			if r.Method == http.MethodGet && (isStatic || isReadOnlyPath(r.URL.Path)) {
+				next(w, r)
+				return
+			}
 			ck, err := r.Cookie("asg_session")
 			if err != nil || !a.valid(ck.Value) {
 				if strings.HasPrefix(r.URL.Path, "/api/") {

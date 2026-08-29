@@ -92,11 +92,22 @@ func TestPublicAgentIngressAcceptsTelemetryButKeepsOperatorAuth(t *testing.T) {
 		t.Fatalf("public telemetry identity was not downgraded: %+v", recent)
 	}
 
+	// Read-only operator GETs are intentionally public (免密只读公网): a remote
+	// viewer may read the agent list without a session.
 	adminReq := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
 	adminReq.RemoteAddr = "203.0.113.5:1234"
 	adminRec := httptest.NewRecorder()
 	mux.ServeHTTP(adminRec, adminReq)
-	if adminRec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected remote operator API to remain protected, got %d", adminRec.Code)
+	if adminRec.Code == http.StatusUnauthorized {
+		t.Fatalf("read-only /api/agents should be public, got %d", adminRec.Code)
+	}
+
+	// Mutations and non-GET on operator APIs still require the admin session.
+	writeReq := httptest.NewRequest(http.MethodDelete, "/api/agents/delete?agent_id=public-agent-1", nil)
+	writeReq.RemoteAddr = "203.0.113.5:1234"
+	writeRec := httptest.NewRecorder()
+	mux.ServeHTTP(writeRec, writeReq)
+	if writeRec.Code != http.StatusUnauthorized {
+		t.Fatalf("remote mutation must stay protected, got %d", writeRec.Code)
 	}
 }
