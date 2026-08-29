@@ -51,6 +51,7 @@ export const api = {
   judgeFindings: () => get<any>('/api/judge/findings'),
   monitorFindings: () => get<any>('/api/monitor/findings'),
   status: () => get<any>('/api/status'),
+  statsSummary: (n = 300) => get<any>(`/api/stats/summary?n=${n}`),
   approvals: () => get<any[]>('/api/approvals'),
   suggestions: () => get<any[]>('/api/suggestions'),
   trajectory: (session: string) => get<any>(`/api/trajectory?session=${encodeURIComponent(session)}`),
