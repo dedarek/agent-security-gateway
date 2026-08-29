@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
-import KGGraph from '../components/KGGraph'
+import { OntoInsight } from '../components/OntoInsight'
 import { VerdictBadge } from '../components/VerdictBadge'
 import { EmptyState } from '../components/EmptyState'
 import { SkeletonRows } from '../components/Skeleton'
@@ -26,7 +26,7 @@ export default function Insight() {
         <TabBtn id="sessions" cur={tab} set={setTab} label="会话" />
       </div>
       <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-        {tab === 'graph' && <KGGraph focus={focus} />}
+        {tab === 'graph' && <OntoInsight />}
         {tab === 'findings' && <Findings />}
         {tab === 'sessions' && <Sessions focus={focus} />}
       </div>
