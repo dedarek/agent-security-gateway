@@ -46,7 +46,14 @@ type Server struct {
 	streamClose       chan struct{}
 	behaviorURL       string
 	outputGuardURL    string
+	// kgLive feeds new events into the KG builder+bridge so the lineage
+	// graph grows in real time (previously only the MCP proxy path ingested;
+	// hook-path events never reached the graph until a 30s self-heal replay).
+	kgLive func(ev api.Event)
 }
+
+// SetKGLive wires the live KG ingest callback (builder.Ingest + bridge push).
+func (s *Server) SetKGLive(fn func(ev api.Event)) { s.kgLive = fn }
 
 // SetSidecarURLs records the behavior/outputguard sidecar base URLs so the
 // status API can probe them server-side.

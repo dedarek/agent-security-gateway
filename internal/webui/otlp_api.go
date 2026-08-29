@@ -199,6 +199,9 @@ func (s *Server) apiAgentActivity(w http.ResponseWriter, r *http.Request) {
 				ev.Result = &api.ToolResult{CallID: call.CallID, Output: []byte(verdictStr + ": " + d.Rationale)}
 			}
 			_ = s.Store.Write(ev)
+			if s.kgLive != nil {
+				s.kgLive(ev)
+			}
 		}
 	}
 	// Persist activity chain.

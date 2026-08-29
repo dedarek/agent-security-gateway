@@ -253,6 +253,16 @@ func serveCmd(args []string) {
 	// Hermes/Pi exporters push traces here. Visibility is decoupled from
 	// the proxy path — direct-connect models stay observable.
 	uiSrv.RegisterOTLP(uiMux)
+	// Live KG ingest: every hook-path event also flows into the graph, so the
+	// lineage view reflects activity within the request instead of waiting
+	// for the 30s self-heal replay. Bridge push failures are non-fatal.
+	uiSrv.SetKGLive(func(ev api.Event) {
+		kgBuilder.Ingest(ev)
+		ents, rels := kgBuilder.Export()
+		if kgBridgeInst != nil && (len(ents) > 0 || len(rels) > 0) {
+			_ = kgBridgeInst.Ingest(ents, rels)
+		}
+	})
 
 	// Semantica Explorer proxied into the console (unified interface).
 	webui.RegisterExplorerProxy(uiMux, cfg.ExplorerURL, cfg.ExplorerAPIKey)
