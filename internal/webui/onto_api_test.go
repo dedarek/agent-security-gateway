@@ -66,7 +66,7 @@ func TestOntoStories(t *testing.T) {
 
 func TestOntoLineageTainted(t *testing.T) {
 	_, mux := ontoSrv(seedOntoStore(t))
-	body := get(t, mux, "/api/onto/lineage?focus="+urlQueryEscape("org:file:/home/u/.aws/credentials"))
+	body := get(t, mux, "/api/onto/lineage?focus="+urlQueryEscape("org:file:/.aws/credentials"))
 	if !strings.Contains(body, "flows_to") || !strings.Contains(body, `"tainted":true`) {
 		t.Fatalf("lineage missing tainted flows_to: %s", body)
 	}

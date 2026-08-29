@@ -55,7 +55,7 @@ func TestOntology_NodeCountDoesNotGrowWithActions(t *testing.T) {
 			`{"file_path":"/home/u/.aws/credentials"}`, "", api.VerdictAllow, 0, ""))
 	}
 	g := BuildOntology(events)
-	if n := hasNode(g, "org:file:/home/u/.aws/credentials"); n == nil {
+	if n := hasNode(g, "org:file:/.aws/credentials"); n == nil {
 		t.Fatal("origin node missing")
 	} else if got := n.Props["reads"].(int); got != 20 {
 		t.Fatalf("expected reads=20, got %d", got)
@@ -75,7 +75,7 @@ func TestOntology_TaintLineage(t *testing.T) {
 			"blocked", api.VerdictBlock, 93, "/home/u/.aws/credentials"),
 	}
 	g := BuildOntology(events)
-	if !hasEdge(g, "org:file:/home/u/.aws/credentials", "flows_to", "snk:host:evil.com") {
+	if !hasEdge(g, "org:file:/.aws/credentials", "flows_to", "snk:host:evil.com") {
 		ids := []string{}
 		for _, e := range g.Edges {
 			ids = append(ids, e.Source+"-"+e.Type+"->"+e.Target)
@@ -97,7 +97,7 @@ func TestOntology_OriginReusedAcrossAgents(t *testing.T) {
 	g := BuildOntology(events)
 	reads := 0
 	for _, e := range g.Edges {
-		if e.Type == "reads" && e.Target == "org:file:/home/u/.aws/credentials" {
+		if e.Type == "reads" && e.Target == "org:file:/.aws/credentials" {
 			reads++
 		}
 	}
@@ -113,7 +113,7 @@ func TestEvidence_SoleAxis(t *testing.T) {
 	if !e.SoleAxis {
 		t.Fatal("expected sole_axis for single-blocker decision")
 	}
-	if e.TaintFrom != "org:file:/home/u/.aws/credentials" {
+	if e.TaintFrom != "org:file:/.aws/credentials" {
 		t.Fatalf("taint_from wrong: %s", e.TaintFrom)
 	}
 	if len(e.Votes) != 2 {

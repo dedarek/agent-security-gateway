@@ -200,6 +200,26 @@ func riskSubgraph(g *kg.OntoGraph, cap int) map[string]any {
 	for _, n := range nodes {
 		keep[n.ID] = true
 	}
+	// Agents/tools are structural anchors, not decoration: always include any
+	// agent/tool that touches a kept node, so the graph never loses its actors
+	// even when the cap is tight (this was dropping all agent/tool nodes).
+	for _, n := range g.Nodes {
+		if n.Type != "agent" && n.Type != "tool" {
+			continue
+		}
+		for _, e := range g.Edges {
+			if (e.Source == n.ID && keep[e.Target]) || (e.Target == n.ID && keep[e.Source]) {
+				keep[n.ID] = true
+				break
+			}
+		}
+	}
+	nodes = nodes[:0]
+	for _, n := range g.Nodes {
+		if keep[n.ID] {
+			nodes = append(nodes, n)
+		}
+	}
 	var edges []kg.OntoEdge
 	for _, e := range g.Edges {
 		if keep[e.Source] && keep[e.Target] {

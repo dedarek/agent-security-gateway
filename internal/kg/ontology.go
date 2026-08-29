@@ -55,9 +55,17 @@ func normHost(h string) string {
 	return h
 }
 
-// normPath trims trailing slash — conservative merge only.
+// normPath trims the user/home/workspace prefix so the same logical asset
+// converges to one node regardless of which machine or arg-encoding produced
+// it ("/home/u/.aws/credentials", "/Users/me/.aws/credentials", and a bare
+// ".aws/credentials" are the SAME origin). Trailing slash trimmed.
+var homePrefix = regexp.MustCompile(`^/(home|Users)/[^/]+`)
+
 func normPath(p string) string {
-	return strings.TrimSuffix(strings.TrimSpace(p), "/")
+	p = strings.TrimSpace(p)
+	p = homePrefix.ReplaceAllString(p, "") // strip /home/<user> or /Users/<user>
+	p = strings.TrimSuffix(p, "/")
+	return p
 }
 
 // BuildOntology folds events into the unified B/D/E graph.
