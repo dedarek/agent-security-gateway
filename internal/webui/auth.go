@@ -84,11 +84,12 @@ func isReadOnlyPath(p string) bool {
 func (a *uiAuth) middleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !a.isLocalOnly(r) {
-			// public/remote: static assets (they carry a dot) + read-only GETs
-			// are open so the console shell loads and read views work for an
-			// anonymous viewer. Data writes and non-GET still need the session.
+			// public/remote: the console shell (SPA paths) + static assets +
+			// read-only GETs are open so an anonymous viewer can load and browse.
+			// Data writes and non-GET still need the session.
 			isStatic := strings.Contains(r.URL.Path, ".") && !strings.HasPrefix(r.URL.Path, "/api/")
-			if r.Method == http.MethodGet && (isStatic || isReadOnlyPath(r.URL.Path)) {
+			isShell := !strings.HasPrefix(r.URL.Path, "/api/") // SPA route or "/"
+			if r.Method == http.MethodGet && (isStatic || isShell || isReadOnlyPath(r.URL.Path)) {
 				next(w, r)
 				return
 			}
