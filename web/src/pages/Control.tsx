@@ -1,116 +1,133 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
-import { VerdictBadge } from '../components/VerdictBadge'
+import type { Agent } from '../lib/types'
+import { StatusDot } from '../components/StatusDot'
 import { EmptyState } from '../components/EmptyState'
 import { SkeletonRows } from '../components/Skeleton'
 
-const AXES = ['permission', 'behavior', 'data_network', 'egress']
+// 能力项：一个 agent 能做/不能做某类操作。rule_id 对应引擎的工具/动作。
+const CAPS: { rule_id: string; label: string; desc: string; l2?: boolean }[] = [
+  { rule_id: 'Bash', label: 'Shell 执行', desc: '跑任意 shell 命令（高危）', l2: true },
+  { rule_id: 'WebFetch', label: '网络外发', desc: '向外部 URL 发请求（数据外泄风险）', l2: true },
+  { rule_id: 'Write', label: '写文件', desc: '创建/覆盖文件' },
+  { rule_id: 'Edit', label: '改文件', desc: '编辑已有文件' },
+  { rule_id: 'Read', label: '读文件', desc: '读取本地文件（含敏感路径检测）' },
+  { rule_id: 'WebSearch', label: '联网搜索', desc: '发起网络搜索' },
+]
+const ACTIONS = ['allow', 'confirm', 'block'] as const
 
+/** Control — per-agent capability policy. Pick an agent, toggle what it may do. */
 export default function Control() {
   const qc = useQueryClient()
-  const [filter, setFilter] = useState('')
-  const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState({ agent_id: '', rule_id: '', action: 'block', axis: 'permission' })
+  const { data: agents, isLoading: la } = useQuery({ queryKey: ['agents'], queryFn: api.agents })
+  const { data: policies } = useQuery({ queryKey: ['policies'], queryFn: () => api.policies() })
+  const [selId, setSelId] = useState<string | null>(null)
 
-  const { data: policies, isLoading } = useQuery({ queryKey: ['policies', filter], queryFn: () => api.policies(filter || undefined) })
-  const { data: approvals } = useQuery({ queryKey: ['approvals'], queryFn: api.approvals, refetchInterval: 5000 })
-  const { data: suggestions } = useQuery({ queryKey: ['suggestions'], queryFn: api.suggestions, refetchInterval: 10000 })
+  const real = (agents || []).filter(isRealAgent)
+  const sel = selId ?? real[0]?.agent_id ?? null
 
-  const upsert = useMutation({ mutationFn: (body: any) => api.upsertPolicy(body), onSuccess: () => { qc.invalidateQueries({ queryKey: ['policies'] }); setShowForm(false) } })
-  const del = useMutation({ mutationFn: (id: number) => api.deletePolicy(id), onSuccess: () => qc.invalidateQueries({ queryKey: ['policies'] }) })
-  const changeAction = useMutation({
-    mutationFn: (p: any) => api.upsertPolicy({ agent_id: p.agent_id, rule_id: p.rule_id, axis: p.axis, action: p.action, enabled: p.enabled !== false }),
+  const upsert = useMutation({
+    mutationFn: (body: any) => api.upsertPolicy(body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['policies'] }),
   })
 
-  const pendApprovals = approvals || []
-  const pendSuggs = (suggestions || []).filter((s: any) => !s.decided && !s.decision)
+  // current action for (agent, rule): per-agent policy > global > default allow
+  const pols: any[] = policies || []
+  const actionFor = (rule: string): string => {
+    const per = pols.find((p) => p.agent_id === sel && p.rule_id === rule)
+    if (per) return per.action
+    const glob = pols.find((p) => !p.agent_id && p.rule_id === rule)
+    if (glob) return glob.action
+    return 'allow'
+  }
+  const setAction = (rule: string, action: string) =>
+    upsert.mutate({ agent_id: sel, rule_id: rule, action, axis: 'permission', enabled: true })
 
   return (
-    <div style={{ padding: 22 }}>
-      <h1 className="h-page">管控</h1>
-      <div className="small dim" style={{ marginBottom: 14 }}>策略即裁决：per-agent 优先于 global；action 下拉即改即存。</div>
-
-      {/* 待处理 */}
-      <h2 className="h-sec" style={{ marginBottom: 8 }}>待处理 <span className="dim">({pendApprovals.length + pendSuggs.length})</span></h2>
-      {pendApprovals.length + pendSuggs.length === 0 ? (
-        <div className="card" style={{ marginBottom: 18 }}>
-          <EmptyState icon="✓" title="无待办" hint="没有待批准的审批，也没有未裁决的策略建议。系统在按既定策略自动裁决。" />
-        </div>
-      ) : (
-        <div className="col" style={{ gap: 8, marginBottom: 18 }}>
-          {pendApprovals.map((x: any, i: number) => (
-            <div key={`a${i}`} className="card card-pad row-between">
-              <div className="row" style={{ gap: 10 }}>
-                <span className="badge badge-confirm">审批</span>
-                <span className="small">{x.title || x.summary || JSON.stringify(x).slice(0, 120)}</span>
-              </div>
-            </div>
-          ))}
-          {pendSuggs.map((x: any, i: number) => (
-            <div key={`s${i}`} className="card card-pad row-between">
-              <div className="row" style={{ gap: 10 }}>
-                <span className="badge badge-redact">建议</span>
-                <span className="small">{x.title || x.rule_id || JSON.stringify(x).slice(0, 120)}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* 策略表 */}
-      <div className="row-between" style={{ marginBottom: 8 }}>
-        <h2 className="h-sec">策略 <span className="dim">({(policies || []).length})</span></h2>
-        <div className="row" style={{ gap: 8 }}>
-          <input className="input" placeholder="按 agent_id 过滤（留空看全局）" value={filter} onChange={(e) => setFilter(e.target.value)} />
-          <button className="btn btn-primary" onClick={() => setShowForm(!showForm)}>{showForm ? '收起' : '+ 新增策略'}</button>
-        </div>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div style={{ padding: '16px 22px 12px', borderBottom: '1px solid var(--line)' }}>
+        <h1 className="h-page">管控</h1>
+        <div className="small dim">选一个 Agent，配置它能不能做某类操作。改动立即生效。</div>
       </div>
 
-      {showForm && (
-        <div className="card card-pad col slide-in" style={{ gap: 10, marginBottom: 14 }}>
-          <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-            <input className="input" placeholder="agent_id（留空为全局）" value={form.agent_id} onChange={(e) => setForm({ ...form, agent_id: e.target.value })} />
-            <input className="input" placeholder="rule_id（如 Bash 或 *）" value={form.rule_id} onChange={(e) => setForm({ ...form, rule_id: e.target.value })} />
-            <select className="select" value={form.axis} onChange={(e) => setForm({ ...form, axis: e.target.value })}>
-              {AXES.map((x) => <option key={x} value={x}>{x}</option>)}
-            </select>
-            <select className="select" value={form.action} onChange={(e) => setForm({ ...form, action: e.target.value })}>
-              {['block', 'confirm', 'redact', 'alert', 'log'].map((x) => <option key={x} value={x}>{x}</option>)}
-            </select>
-            <button className="btn btn-primary" disabled={!form.rule_id} onClick={() => upsert.mutate({ agent_id: form.agent_id || null, rule_id: form.rule_id, action: form.action, axis: form.axis, enabled: true })}>保存</button>
-          </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', flex: 1, minHeight: 0 }}>
+        {/* agent picker */}
+        <div style={{ borderRight: '1px solid var(--line)', overflowY: 'auto', background: 'var(--bg-1)' }}>
+          <div className="card-pad" style={{ paddingBottom: 8 }}><div className="h-sec">Agent <span className="dim">({real.length})</span></div></div>
+          {la && <SkeletonRows n={3} h={48} />}
+          {!la && real.length === 0 && <EmptyState icon="◇" title="暂无 agent" hint="先接入一个 agent。" />}
+          {real.map((a) => (
+            <button key={a.agent_id} onClick={() => setSelId(a.agent_id)} style={{
+              width: '100%', textAlign: 'left', background: sel === a.agent_id ? 'var(--bg-2)' : 'transparent',
+              border: 'none', borderLeft: `3px solid ${sel === a.agent_id ? 'var(--brand)' : 'transparent'}`,
+              padding: '10px 14px', cursor: 'pointer', color: 'inherit', font: 'inherit',
+            }}>
+              <div className="row" style={{ gap: 8 }}>
+                <StatusDot status={a.status} />
+                <span style={{ fontWeight: 600, fontSize: 13 }}>{a.alias || a.agent_id}</span>
+              </div>
+              <div className="small dim mono" style={{ marginTop: 2 }}>{a.agent_id}</div>
+            </button>
+          ))}
         </div>
-      )}
 
-      <div className="card" style={{ overflow: 'hidden' }}>
-        {isLoading ? <SkeletonRows n={4} /> : (
-          <table className="table">
-            <thead><tr><th>Agent</th><th>Rule</th><th>Axis</th><th>Action</th><th>状态</th><th></th></tr></thead>
-            <tbody>
-              {(policies || []).map((p: any) => (
-                <tr key={p.id}>
-                  <td>{p.agent_id ? <span className="mono small">{p.agent_id}</span> : <span className="dim">global</span>}</td>
-                  <td className="mono small">{p.rule_id}</td>
-                  <td className="small muted">{p.axis}</td>
-                  <td>
-                    <select className="select" style={{ padding: '4px 8px', fontSize: 11 }} value={p.action}
-                      onChange={(e) => changeAction.mutate({ ...p, action: e.target.value })}>
-                      {['block', 'confirm', 'redact', 'alert', 'log'].map((x) => <option key={x} value={x}>{x}</option>)}
-                    </select>
-                  </td>
-                  <td><VerdictBadge v={p.action} /></td>
-                  <td><button className="btn btn-ghost" style={{ color: 'var(--block)', padding: '3px 10px', fontSize: 11 }} onClick={() => del.mutate(p.id)}>删除</button></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        {!isLoading && (policies || []).length === 0 && (
-          <EmptyState icon="◇" title="暂无策略" hint="默认全部走内置三级风险模型（L0 只读 / L1 写 / L2 高危）。新增策略可覆盖默认值。" />
-        )}
+        {/* capability grid */}
+        <div style={{ overflowY: 'auto', padding: 22, minWidth: 0 }}>
+          {!sel ? <EmptyState icon="←" title="选一个 Agent" hint="左侧选择要配置的 agent。" /> : (
+            <>
+              <div className="row" style={{ gap: 10, marginBottom: 6 }}>
+                <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{real.find((x) => x.agent_id === sel)?.alias || sel}</h2>
+                <StatusDot status={real.find((x) => x.agent_id === sel)?.status || 'offline'} />
+              </div>
+              <div className="small dim" style={{ marginBottom: 16 }}>允许 = 直接放行 · 确认 = 需人工确认 · 拦截 = 直接阻断</div>
+
+              <div className="col" style={{ gap: 10, maxWidth: 640 }}>
+                {CAPS.map((c) => {
+                  const cur = actionFor(c.rule_id)
+                  return (
+                    <div key={c.rule_id} className="card card-pad row-between">
+                      <div>
+                        <div className="row" style={{ gap: 8 }}>
+                          <span style={{ fontWeight: 600 }}>{c.label}</span>
+                          {c.l2 && <span className="badge badge-confirm">L2 高危</span>}
+                          <span className="chip mono small">{c.rule_id}</span>
+                        </div>
+                        <div className="small dim" style={{ marginTop: 3 }}>{c.desc}</div>
+                      </div>
+                      <div className="seg">
+                        {ACTIONS.map((act) => (
+                          <button key={act}
+                            className={`seg-item ${cur === act ? 'on' : ''}`}
+                            style={cur === act ? segOnColor(act) : undefined}
+                            onClick={() => setAction(c.rule_id, act)}>
+                            {act === 'allow' ? '允许' : act === 'confirm' ? '确认' : '拦截'}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+              <div className="small dim" style={{ marginTop: 14 }}>
+                规则写入 <code>/api/policies</code>（agent={sel}）。未配的项走内置三级风险模型默认值。
+              </div>
+            </>
+          )}
+        </div>
       </div>
     </div>
   )
+}
+
+function segOnColor(act: string): React.CSSProperties {
+  if (act === 'block') return { background: 'var(--block)', color: '#fff' }
+  if (act === 'confirm') return { background: 'var(--confirm)', color: '#fff' }
+  return { background: 'var(--allow)', color: '#fff' }
+}
+
+function isRealAgent(a: Agent): boolean {
+  const testPrefix = /^(bugb-|final-|hook-agent|sectest-|e2e-|test-|audit-|rtt-|lv-|lineage-|tp\d|dbg-|rep-|g3-|gg-|fp\d|vchain|gfinal|clean-|chain-|eng\d|guard-|m3-|sess-|red-|probe-)/
+  if (a.agent_id === 'x' || testPrefix.test(a.agent_id)) return false
+  return Boolean((a as any).machine_name || (a as any).machine_id)
 }
