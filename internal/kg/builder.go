@@ -52,32 +52,41 @@ func (b *Builder) Ingest(ev api.Event) {
 	if i := strings.Index(sid, "-"); i > 0 && strings.HasPrefix(sid, "tenant-") {
 		tenant = sid[len("tenant-"):]
 	}
-	trace := ev.TraceID
-	if trace == "" {
-		trace = "trace-" + ev.Call.CallID
-	}
 
-	b.addEntity("agent:"+ev.Call.Principal.UserID+"@"+tenant, "Agent", map[string]any{
+	// Agent identity: the hook path (PreToolUse) carries the real agent in
+	// Principal.AgentID and leaves UserID empty; the MCP proxy path is the
+	// reverse. Using UserID first produced "agent:@<session>" stubs that
+	// broke lineage (graph/path returned no-path) because events never
+	// connected back to a concrete agent. Prefer AgentID, fall back to
+	// UserID, and never fold the session into the agent id — one agent owns
+	// many sessions, and folding turned 50 test sessions into 50 fake agents.
+	actor := ev.Call.Principal.AgentID
+	if actor == "" {
+		actor = ev.Call.Principal.UserID
+	}
+	if actor == "" {
+		actor = "unknown"
+	}
+	agentID := "agent:" + actor
+
+	b.addEntity(agentID, "Agent", map[string]any{
 		"role": ev.Call.Principal.Role, "machine": tenant,
 	})
 	b.addEntity("tool:"+lastSeg(ev.Call.ToolID), "Tool", nil)
 	b.addEntity("evt:"+ev.Call.CallID, "Event", map[string]any{
 		"verdict": ev.Decision.Final.String(), "risk": ev.Decision.Risk,
-		"rationale": ev.Decision.Rationale,
+		"rationale": ev.Decision.Rationale, "session": sid,
 	})
-	if trace != "" {
-		b.addEntity("trace:"+trace, "Trace", nil)
-	}
+	// Trace nodes were 1:1 with Events ("trace-<CallID>" when no real trace
+	// id) and carried no information — 156 of 371 nodes were this noise. Drop
+	// them; the Event node already holds verdict/risk/session for lineage.
 	if ev.Result != nil && len(ev.Result.Output) > 0 && looksExternal(string(ev.Result.Output)) {
 		b.addEntity("ext:"+hash8(string(ev.Result.Output)), "ExternalActor",
 			map[string]any{"sample": truncate(string(ev.Result.Output), 60)})
 	}
 
-	b.addRel("agent:"+ev.Call.Principal.UserID+"@"+tenant, "performed", "evt:"+ev.Call.CallID, nil)
+	b.addRel(agentID, "performed", "evt:"+ev.Call.CallID, nil)
 	b.addRel("evt:"+ev.Call.CallID, "used", "tool:"+lastSeg(ev.Call.ToolID), nil)
-	if trace != "" {
-		b.addRel("trace:"+trace, "includes", "evt:"+ev.Call.CallID, nil)
-	}
 }
 
 // Export returns the accumulated graph in Semantica KnowledgeGraph shape.
