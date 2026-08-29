@@ -48,7 +48,7 @@ function ExplorerEmbed() {
         <span className={`badge ${ready ? 'badge-allow' : 'badge-confirm'}`}>{ready ? 'graph ready' : 'warming up'}</span>
       </div>
       <iframe
-        src="/explorer/"
+        src="/explorer/?embed=1"
         title="Semantica Knowledge Graph"
         style={{ flex: 1, minHeight: 0, border: '1px solid var(--line)', borderRadius: 'var(--r-m)', background: '#fff' }}
       />
