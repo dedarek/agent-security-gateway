@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import { OntoInsight } from '../components/OntoInsight'
@@ -7,7 +6,7 @@ import { VerdictBadge } from '../components/VerdictBadge'
 import { EmptyState } from '../components/EmptyState'
 import { SkeletonRows } from '../components/Skeleton'
 
-type Tab = 'graph' | 'lineage' | 'findings' | 'sessions'
+type Tab = 'graph' | 'findings' | 'sessions'
 
 export default function Insight() {
   const [params, setParams] = useSearchParams()
@@ -22,36 +21,14 @@ export default function Insight() {
       </div>
       <div className="tabs" style={{ padding: '0 22px' }}>
         <TabBtn id="graph" cur={tab} set={setTab} label="图谱" />
-        <TabBtn id="lineage" cur={tab} set={setTab} label="血缘追溯" />
         <TabBtn id="findings" cur={tab} set={setTab} label="发现" />
         <TabBtn id="sessions" cur={tab} set={setTab} label="会话" />
       </div>
-      <div style={{ flex: 1, minHeight: 0, overflow: tab === 'graph' ? 'hidden' : 'auto', display: tab === 'graph' ? 'flex' : 'block', flexDirection: 'column' }}>
-        {tab === 'graph' && <ExplorerEmbed />}
-        {tab === 'lineage' && <OntoInsight />}
+      <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+        {tab === 'graph' && <OntoInsight />}
         {tab === 'findings' && <Findings />}
         {tab === 'sessions' && <Sessions focus={focus} />}
       </div>
-    </div>
-  )
-}
-
-// ExplorerEmbed mounts the Semantica GraphWorkspace (Sigma WebGL + ForceAtlas2
-// continuous layout + timeline) under /explorer/, fed by our ontology graph.
-function ExplorerEmbed() {
-  const { data: status } = useQuery({ queryKey: ['status'], queryFn: api.status, refetchInterval: 10000 })
-  const ready = status?.kg?.graph_ready
-  return (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 22px 16px' }}>
-      <div className="row-between" style={{ marginBottom: 8 }}>
-        <span className="small dim">Semantica 大图谱 · Sigma WebGL · ForceAtlas2 连续布局 · 拖拽/滚轮缩放/点节点看血缘</span>
-        <span className={`badge ${ready ? 'badge-allow' : 'badge-confirm'}`}>{ready ? 'graph ready' : 'warming up'}</span>
-      </div>
-      <iframe
-        src="/explorer/?embed=1"
-        title="Semantica Knowledge Graph"
-        style={{ flex: 1, minHeight: 0, border: '1px solid var(--line)', borderRadius: 'var(--r-m)', background: '#fff' }}
-      />
     </div>
   )
 }
