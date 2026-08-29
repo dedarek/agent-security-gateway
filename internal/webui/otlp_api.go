@@ -219,14 +219,17 @@ func (s *Server) apiAgentActivity(w http.ResponseWriter, r *http.Request) {
 		// Only store meaningful steps (kind/session/tool) or forced keepalive
 		if toolName != "" || sessionID != "" || kind == "session_start" || kind == "session_end" {
 			s.Activity.Add(step)
+			s.NotifyActivity(step)
 		} else if body.Model != "" || body.SessionID != "" {
 			// Model/session ping without hook payload — still record as generic event
 			s.Activity.Add(step)
+			s.NotifyActivity(step)
 		} else {
 			// Pure keepalive — store minimal marker so the chain shows liveness,
 			// but avoid spamming when hooks fire with empty payloads.
 			if kind != "tool_use" {
 				s.Activity.Add(step)
+				s.NotifyActivity(step)
 			}
 		}
 	}

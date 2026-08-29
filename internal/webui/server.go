@@ -42,6 +42,8 @@ type Server struct {
 	// deliberately separate from operator-console and central-MCP auth.
 	agentIngressOpen  bool
 	publicLLMUpstream string
+	hub               *sseHub
+	streamClose       chan struct{}
 }
 
 func New(st *store.Store, am *approval.Manager, hub *policyhub.Hub) *Server {
