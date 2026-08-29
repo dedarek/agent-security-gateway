@@ -1,50 +1,28 @@
-import { useEffect, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { api } from '../lib/api'
 
-type Probe = { name: string; url: string }
-
-const PROBES: Probe[] = [
-  { name: 'gateway :8090', url: '/healthz' },
-  { name: 'behavior :8901', url: 'http://127.0.0.1:8901/health' },
-  { name: 'kg-worker :8902', url: 'http://127.0.0.1:8902/health' },
-  { name: 'outputguard :8903', url: 'http://127.0.0.1:8903/health' },
-  { name: 'cpolar 公网', url: 'https://asg-gateway.vip.cpolar.cn/healthz' },
-]
-
-/** HealthBar pings each sidecar every 10s and shows a pulsing dot per service. */
+/** HealthBar reads the gateway-aggregated /api/status services map, so the
+ * browser never cross-origin fetches sidecars or the public tunnel. */
 export function HealthBar() {
-  const [ok, setOk] = useState<Record<string, boolean>>({})
-  useEffect(() => {
-    let dead = false
-    const ping = async () => {
-      const next: Record<string, boolean> = {}
-      await Promise.all(PROBES.map(async (p) => {
-        try {
-          const ctrl = new AbortController()
-          const t = setTimeout(() => ctrl.abort(), 3000)
-          const r = await fetch(p.url, { signal: ctrl.signal, mode: p.url.startsWith('http') ? 'cors' : 'same-origin' })
-          clearTimeout(t)
-          next[p.name] = r.ok
-        } catch {
-          next[p.name] = false
-        }
-      }))
-      if (!dead) setOk(next)
-    }
-    ping()
-    const iv = setInterval(ping, 10000)
-    return () => { dead = true; clearInterval(iv) }
-  }, [])
-
+  const { data } = useQuery({ queryKey: ['status'], queryFn: api.status, refetchInterval: 10000 })
+  const services: Record<string, boolean> = data?.services || {}
+  const order = ['gateway', 'behavior', 'kg-worker', 'outputguard', 'cpolar']
+  const label: Record<string, string> = {
+    gateway: 'gateway :8090', behavior: 'behavior :8901',
+    'kg-worker': 'kg-worker :8902', outputguard: 'outputguard :8903', cpolar: 'cpolar 公网',
+  }
   return (
     <div className="card card-pad row" style={{ gap: 18, flexWrap: 'wrap' }}>
       <span className="h-sec">系统健康</span>
-      {PROBES.map((p) => {
-        const state = ok[p.name]
+      {order.map((k) => {
+        const state = services[k]
         return (
-          <span key={p.name} className="row small" style={{ gap: 6 }}>
-            <span className={`health-dot ${state === undefined ? '' : state ? 'health-ok' : 'health-bad'}`}
-              style={state === undefined ? { background: 'var(--fg-2)' } : undefined} />
-            <span className="muted">{p.name}</span>
+          <span key={k} className="row small" style={{ gap: 6 }}>
+            <span
+              className={`health-dot ${state === undefined ? '' : state ? 'health-ok' : 'health-bad'}`}
+              style={state === undefined ? { background: 'var(--fg-2)' } : undefined}
+            />
+            <span className="muted">{label[k] || k}</span>
           </span>
         )
       })}

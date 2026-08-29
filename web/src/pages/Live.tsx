@@ -47,6 +47,8 @@ export default function Live() {
   const blocks = feed.filter((s) => s.verdict === 'BLOCK').length
   const confirms = feed.filter((s) => s.verdict === 'CONFIRM').length
   const kg = status?.kg || {}
+  // "活跃" counts active only; "在线" counts active+idle (process alive).
+  const online = active.length + idle.length
 
   return (
     <div className="col" style={{ padding: 22, gap: 16 }}>
@@ -64,16 +66,16 @@ export default function Live() {
         { label: '拦截 BLOCK', value: blocks, color: 'var(--block)' },
         { label: '待确认 CONFIRM', value: confirms, color: 'var(--confirm)' },
         { label: '活跃 Agent', value: active.length, color: 'var(--allow)' },
+        { label: '在线 Agent', value: online },
         { label: 'KG 节点', value: kg.node_count ?? kg.entities ?? 0 },
-        { label: 'KG 边', value: kg.edge_count ?? 0 },
       ]} />
 
       <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: 16, alignItems: 'start' }}>
         <EventStream steps={feed} live={streamStatus === 'live'} onSelect={setSelected} />
         <div className="col" style={{ gap: 12 }}>
-          <div className="h-sec">活跃 Agent</div>
-          {active.length + idle.length === 0 && (
-            <EmptyState icon="◇" title="暂无活跃 Agent" hint="按 docs/ONBOARDING.md 一行接入；注册后此处实时出现。" />
+          <div className="h-sec">在线 Agent</div>
+          {online === 0 && (
+            <EmptyState icon="◇" title="暂无在线 Agent" hint="按 docs/ONBOARDING.md 一行接入；注册后此处实时出现。" />
           )}
           {[...active, ...idle].slice(0, 6).map((a) => <AgentCard key={a.agent_id} a={a} />)}
         </div>

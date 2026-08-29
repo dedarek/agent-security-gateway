@@ -245,6 +245,7 @@ func serveCmd(args []string) {
 	uiSrv.RegisterJudgeAPI(uiMux)
 	uiSrv.RegisterMonitorAPI(uiMux)
 	uiSrv.RegisterStatusAPI(uiMux, kgBridgeInst, mon)
+	uiSrv.SetSidecarURLs(cfg.BehaviorSidecarURL, cfg.OutputGuardURL)
 	uiSrv.RegisterPolicyAPI(uiMux)
 	uiSrv.RegisterPerAgentPolicyAPI(uiMux)
 	uiSrv.RegisterStreamAPI(uiMux)

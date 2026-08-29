@@ -44,6 +44,15 @@ type Server struct {
 	publicLLMUpstream string
 	hub               *sseHub
 	streamClose       chan struct{}
+	behaviorURL       string
+	outputGuardURL    string
+}
+
+// SetSidecarURLs records the behavior/outputguard sidecar base URLs so the
+// status API can probe them server-side.
+func (s *Server) SetSidecarURLs(behavior, outputGuard string) {
+	s.behaviorURL = behavior
+	s.outputGuardURL = outputGuard
 }
 
 func New(st *store.Store, am *approval.Manager, hub *policyhub.Hub) *Server {
