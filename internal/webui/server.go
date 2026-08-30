@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -87,6 +89,24 @@ func (s *Server) effectiveIngestAuth(auth func(string) bool) func(string) bool {
 }
 
 func (s *Server) Register(mux *http.ServeMux) {
+	// Public one-line installer — harness-agnostic, no key required.
+	// Must be registered before the SPA catch-all "/" handler.
+	mux.HandleFunc("/install.sh", func(w http.ResponseWriter, r *http.Request) {
+		b, err := os.ReadFile(filepath.Join("scripts", "asg-universal-install.sh"))
+		if err != nil {
+			// Fallback: try relative to executable dir when running as service
+			if ex, e2 := os.Executable(); e2 == nil {
+				b, err = os.ReadFile(filepath.Join(filepath.Dir(ex), "..", "scripts", "asg-universal-install.sh"))
+			}
+		}
+		if err != nil {
+			http.Error(w, "install script not found", 500)
+			return
+		}
+		w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write(b)
+	})
 	// ingest auth: open in dev (nil), tenant-key enforced when SetIngestAuth is called
 	s.RegisterIngestWithAuth(mux, s.effectiveIngestAuth(s.ingestAuth))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
