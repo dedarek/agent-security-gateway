@@ -464,7 +464,7 @@ func (r *Registry) Get(agentID string) (Record, bool) {
 }
 
 func isActive(lastHeartbeat time.Time) bool {
-	return !lastHeartbeat.IsZero() && time.Since(lastHeartbeat.UTC()) <= activeWindow
+	return !lastHeartbeat.IsZero() && time.Since(lastHeartbeat.UTC()) <= heartbeatWindow
 }
 
 func isActiveRecord(v Record) bool {

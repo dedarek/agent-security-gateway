@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import { StatusDot } from '../components/StatusDot'
+import { BrandLogo, logoFor } from '../assets/logos'
 import { VerdictBadge } from '../components/VerdictBadge'
 import { SkeletonRows } from '../components/Skeleton'
 import { EmptyState } from '../components/EmptyState'
@@ -32,13 +33,12 @@ export default function AgentDetail() {
       <div className="row" style={{ gap: 10, margin: '8px 0 4px' }}>
         <h1 className="h-page" style={{ margin: 0 }}>{a.alias || a.agent_id}</h1>
         <StatusDot status={a.status} />
-        <span className="small muted">{a.status}</span>
         {a.observed_model
           ? <span className="badge badge-allow">gateway-observed</span>
           : <span className="badge" style={{ color: 'var(--fg-2)', borderColor: 'var(--line)' }}>self-reported</span>}
       </div>
       <div className="small dim mono" style={{ marginBottom: 16 }}>
-        {a.agent_id} · {a.agent_type || 'unknown'} · {a.model || '无模型'} {a.provider ? `(${a.provider})` : ''} · {a.ip || '-'}
+        <span className="row" style={{ gap: 6 }}>{a.agent_id} · {a.agent_type || 'unknown'} · {logoFor(a.model || a.provider || '') ? <><BrandLogo name={(a.model || a.provider)!} size={14} /> {a.model || '—'}</> : (a.model || '无模型')} {a.provider ? `(${a.provider})` : ''} · {a.ip || '-'}</span>
       </div>
 
       <div className="row" style={{ gap: 10, marginBottom: 18 }}>

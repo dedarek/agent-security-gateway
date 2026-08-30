@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import type { Agent } from '../lib/types'
 import { StatusDot } from '../components/StatusDot'
+import { BrandLogo, logoFor } from '../assets/logos'
 import { EmptyState } from '../components/EmptyState'
 import { SkeletonRows } from '../components/Skeleton'
 
@@ -27,8 +28,8 @@ export default function Fleet() {
                     <div style={{ fontWeight: 600 }}>{a.alias || a.agent_id}</div>
                     <div className="small dim mono">{a.agent_id}{a.agent_type ? ` · ${a.agent_type}` : ''}</div>
                   </td>
-                  <td><span className="row" style={{ gap: 6 }}><StatusDot status={a.status} /><span className="small muted">{a.status}</span></span></td>
-                  <td className="small">{a.model || '-'}{a.provider ? <span className="dim"> ({a.provider})</span> : ''}</td>
+                  <td><StatusDot status={a.status} /></td>
+                  <td className="small"><span className="row" style={{ gap: 6 }}>{logoFor(a.model || a.provider || '') ? <BrandLogo name={(a.model || a.provider)!} size={16} /> : null}{a.model || '-'}{a.provider && a.provider !== a.model ? <span className="dim"> ({a.provider})</span> : ''}</span></td>
                   <td>{(a as any).observed_model ? <span className="badge badge-allow">observed</span> : <span className="badge" style={{ color: 'var(--fg-2)', borderColor: 'var(--line)' }}>self-reported</span>}</td>
                   <td className="small">{a.session_count ?? a.session_ids?.length ?? 0}</td>
                   <td className="small dim mono">{a.ip || '-'}</td>

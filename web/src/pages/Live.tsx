@@ -9,6 +9,7 @@ import { EmptyState } from '../components/EmptyState'
 import { Skeleton } from '../components/Skeleton'
 import { HealthBar } from '../components/HealthBar'
 import { Drawer } from '../components/Drawer'
+import { BrandChip, BrandLogo, logoFor } from '../assets/logos'
 import { Donut } from '../components/charts/Donut'
 import { Gauge } from '../components/charts/Gauge'
 import { Trend } from '../components/charts/Trend'
@@ -129,12 +130,18 @@ function AgentBigCard({ a, onOpen }: { a: Agent; onOpen: () => void }) {
             {machine && <div className="small mono" style={{ color: 'var(--fg-2)', fontSize: 11 }}>{machine}</div>}
           </div>
         </div>
-        <span className="row" style={{ gap: 6, flexShrink: 0, paddingTop: 2 }}><StatusDot status={a.status} /><span className="small muted" style={{ textTransform: 'uppercase', fontWeight: 600 }}>{a.status}</span></span>
+        <span style={{ flexShrink: 0, paddingTop: 2 }}><StatusDot status={a.status} /></span>
       </div>
       <div className="row small" style={{ gap: 6, flexWrap: 'wrap' }}>
-        {a.agent_type && <span className="chip" style={{ background: 'var(--brand)', color: '#fff', borderColor: 'var(--brand)', fontWeight: 600 }}>{a.agent_type}</span>}
-        {a.model && <span className="chip" style={{ background: 'var(--bg-2)', borderColor: 'var(--line)', fontWeight: 600 }}>{a.model}</span>}
-        {a.provider && a.provider !== a.model && <span className="chip" style={{ color: 'var(--fg-2)', borderStyle: 'dashed' }}>{a.provider}</span>}
+        {a.agent_type && (
+          logoFor(a.agent_type) ? <BrandChip name={a.agent_type} /> : <span className="chip" style={{ background: 'var(--brand)', color: '#fff', borderColor: 'var(--brand)', fontWeight: 600 }}>{a.agent_type}</span>
+        )}
+        {a.model ? (
+          logoFor(a.model) ? <BrandChip name={a.model} style={{ background: 'var(--bg-2)', borderColor: 'var(--line)' }} /> : <span className="chip" style={{ background: 'var(--bg-2)', borderColor: 'var(--line)', fontWeight: 600 }}>{a.model}</span>
+        ) : <span className="chip" style={{ color: 'var(--fg-2)', borderStyle: 'dashed', background: 'var(--bg-1)' }}>模型未上报</span>}
+        {a.provider && a.provider !== a.model && (
+          logoFor(a.provider) ? <BrandChip name={a.provider} style={{ color: 'var(--fg-2)', borderStyle: 'dashed' }} /> : <span className="chip" style={{ color: 'var(--fg-2)', borderStyle: 'dashed' }}>{a.provider}</span>
+        )}
         {observed ? <span className="chip" style={{ color: 'var(--allow)', borderColor: 'var(--allow)', background: 'rgba(30,142,62,.06)' }}>observed</span> : null}
       </div>
       <div className="row-between small" style={{ color: 'var(--fg-2)', borderTop: '1px solid var(--line)', paddingTop: 8 }}>
@@ -189,7 +196,6 @@ function AgentDrawer({ agentId, onClose, onDeepDive }: { agentId: string | null;
         <div className="col" style={{ gap: 16 }}>
           <div className="row" style={{ gap: 10 }}>
             <StatusDot status={a.status} />
-            <span className="small muted">{a.status}</span>
             {a.observed_model ? <span className="badge badge-allow">gateway-observed</span> : <span className="badge" style={{ color: 'var(--fg-2)', borderColor: 'var(--line)' }}>self-reported</span>}
           </div>
 

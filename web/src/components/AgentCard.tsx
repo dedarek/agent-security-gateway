@@ -11,7 +11,6 @@ export function AgentCard({ a }: { a: Agent }) {
           <div style={{ fontWeight: 700 }}>{a.alias || a.agent_id}</div>
           <span className="row" style={{ gap: 6 }}>
             <StatusDot status={a.status} />
-            <span className="small muted">{a.status}</span>
           </span>
         </div>
         <div className="small dim mono">{a.agent_id}</div>
