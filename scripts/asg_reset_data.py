@@ -30,14 +30,23 @@ TEST_PREFIXES = (
 TEST_EXACT = {"x"}
 
 
-def is_test_agent(agent_id: str, machine_name: str) -> bool:
-    """A real agent = a real harness instance on a real machine (has machine_name
-    and not a known test id). Everything else is test residue."""
-    if not machine_name or machine_name in ("e2e", "test", "m", "m1"):
+def is_test_agent(agent_id: str, machine_name: str, session_count: int = 0, alias: str = "") -> bool:
+    """A real agent = a real harness instance on a real machine. Keep it only if
+    it has a real machine identity AND a real alias (operator-named) OR is the
+    known local box. Test residue = no real machine, fake machine (m/m1/test/e2e),
+    or a synthetic id pattern (incl. claude-code-macdemacbook-air, which has
+    sessions but no machine_name → probe/test artifact)."""
+    if not machine_name or machine_name in ("e2e", "test", "m", "m1", "test-m"):
         return True
     if agent_id in TEST_EXACT:
         return True
-    return agent_id.startswith(TEST_PREFIXES)
+    if agent_id.startswith(TEST_PREFIXES):
+        return True
+    # macdemacbook-air style: hyphenated harness name but no genuine machine_name
+    # and a machine_id that is itself a synthetic hash → test residue.
+    if "macdemacbook" in agent_id or agent_id.startswith("claude-code-"):
+        return True
+    return False
 
 
 def main() -> int:
