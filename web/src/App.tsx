@@ -2,7 +2,6 @@ import { BrowserRouter, NavLink, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useEventStream } from './lib/sse'
 import Live from './pages/Live'
-import Fleet from './pages/Fleet'
 import AgentDetail from './pages/AgentDetail'
 import Insight from './pages/Insight'
 
@@ -10,7 +9,6 @@ const qc = new QueryClient()
 
 const NAV = [
   { to: '/', label: '实时台', end: true },
-  { to: '/fleet', label: '舰队' },
   { to: '/insight', label: '洞察' },
 ]
 
@@ -45,7 +43,7 @@ function Shell() {
       <main style={{ overflow: 'auto', minHeight: 0, background: 'var(--bg-0)' }}>
         <Routes>
           <Route path="/" element={<Live />} />
-          <Route path="/fleet" element={<Fleet />} />
+          <Route path="/agent/:id" element={<AgentDetail />} />
           <Route path="/fleet/:id" element={<AgentDetail />} />
           <Route path="/insight" element={<Insight />} />
         </Routes>

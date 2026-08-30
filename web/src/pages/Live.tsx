@@ -132,7 +132,7 @@ function AgentBigCard({ a, onOpen }: { a: Agent; onOpen: () => void }) {
         </div>
         <span style={{ flexShrink: 0, paddingTop: 2 }}><StatusDot status={a.status} /></span>
       </div>
-      <div className="row small" style={{ gap: 6, flexWrap: 'wrap' }}>
+      <div className="row small" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         {a.agent_type && (
           (() => {
             const isCustom = a.agent_type.toLowerCase() === 'custom'
@@ -141,10 +141,10 @@ function AgentBigCard({ a, onOpen }: { a: Agent; onOpen: () => void }) {
           })()
         )}
         {a.model ? (
-          logoFor(a.model) ? <BrandChip name={a.model} style={{ background: 'var(--bg-2)', borderColor: 'var(--line)' }} /> : <span className="chip" style={{ background: 'var(--bg-2)', borderColor: 'var(--line)', fontWeight: 600 }}>{a.model}</span>
-        ) : <span className="chip" style={{ color: 'var(--fg-2)', borderStyle: 'dashed', background: 'var(--bg-1)' }}>模型未上报</span>}
+          <span className="row" style={{ gap: 4, alignItems: 'center' }}><span className="small dim">模型</span>{logoFor(a.model) ? <BrandChip name={a.model} style={{ background: 'var(--bg-2)', borderColor: 'var(--line)' }} /> : <span className="chip" style={{ background: 'var(--bg-2)', borderColor: 'var(--line)', fontWeight: 600 }}>{a.model}</span>}</span>
+        ) : <span className="row" style={{ gap: 4, alignItems: 'center' }}><span className="small dim">模型</span><span className="chip" style={{ color: 'var(--fg-2)', borderStyle: 'dashed', background: 'var(--bg-1)' }}>未上报</span></span>}
         {a.provider && a.provider !== a.model && (
-          logoFor(a.provider) ? <BrandChip name={a.provider} style={{ color: 'var(--fg-2)', borderStyle: 'dashed' }} /> : <span className="chip" style={{ color: 'var(--fg-2)', borderStyle: 'dashed' }}>{a.provider}</span>
+          <span className="row" style={{ gap: 4, alignItems: 'center' }}><span className="small dim">厂商</span>{logoFor(a.provider) ? <BrandChip name={a.provider} style={{ color: 'var(--fg-2)', borderStyle: 'dashed' }} /> : <span className="chip" style={{ color: 'var(--fg-2)', borderStyle: 'dashed' }}>{a.provider}</span>}</span>
         )}
         {observed ? <span className="chip" style={{ color: 'var(--allow)', borderColor: 'var(--allow)', background: 'rgba(30,142,62,.06)' }}>observed</span> : null}
       </div>
@@ -177,6 +177,17 @@ function AgentDrawer({ agentId, onClose, onDeepDive }: { agentId: string | null;
     onSuccess: () => qc.invalidateQueries({ queryKey: ['policies'] }),
   })
   const [ctrlOpen, setCtrlOpen] = useState(false)
+  const [aliasEdit, setAliasEdit] = useState<string | null>(null)
+  const [aliasVal, setAliasVal] = useState('')
+  const [deleteConfirm, setDeleteConfirm] = useState(false)
+  const setAlias = useMutation({
+    mutationFn: ({ id, alias }: { id: string; alias: string }) => api.setAlias(id, alias),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['agent-detail', agentId] }); qc.invalidateQueries({ queryKey: ['agents'] }); setAliasEdit(null) },
+  })
+  const delAgent = useMutation({
+    mutationFn: (id: string) => api.deleteAgent(id),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['agents'] }); onClose() },
+  })
   if (!agentId) return null
   const a = data?.agent
   const chain = data?.chain || []
@@ -205,6 +216,17 @@ function AgentDrawer({ agentId, onClose, onDeepDive }: { agentId: string | null;
 
           <dl className="kv">
             <dt>Agent ID</dt><dd className="mono">{a.agent_id}</dd>
+            <dt>自定义名称</dt><dd>
+              {aliasEdit === a.agent_id ? (
+                <span className="row" style={{ gap: 6 }}>
+                  <input className="input" value={aliasVal} onChange={(e) => setAliasVal(e.target.value)} placeholder={displayAlias(a)} style={{ flex: 1 }} />
+                  <button className="btn btn-primary" onClick={() => setAlias.mutate({ id: a.agent_id, alias: aliasVal.trim() })} disabled={!aliasVal.trim()}>保存</button>
+                  <button className="btn btn-ghost" onClick={() => setAliasEdit(null)}>取消</button>
+                </span>
+              ) : (
+                <span className="row" style={{ gap: 8 }}>{displayAlias(a)} <button className="btn btn-ghost" style={{ padding: '2px 8px', fontSize: 11 }} onClick={() => { setAliasEdit(a.agent_id); setAliasVal(displayAlias(a)) }}>重命名</button></span>
+              )}
+            </dd>
             <dt>类型</dt><dd>{a.agent_type || '-'}</dd>
             <dt>模型</dt><dd>{a.model || '-'} {a.provider ? `(${a.provider})` : ''}</dd>
             <dt>机器</dt><dd>{(a as any).machine_name || '-'}</dd>
@@ -213,10 +235,21 @@ function AgentDrawer({ agentId, onClose, onDeepDive }: { agentId: string | null;
             <dt>最后活动</dt><dd className="small">{a.last_activity ? new Date(a.last_activity).toLocaleString('zh-CN') : '-'}</dd>
           </dl>
 
-          <button className="btn" style={{ justifyContent: 'space-between' }} onClick={() => setCtrlOpen(true)}>
-            <span>能力管控</span>
-            <span className="dim">→</span>
-          </button>
+          <div className="row" style={{ gap: 8 }}>
+            <button className="btn" style={{ justifyContent: 'space-between', flex: 1 }} onClick={() => setCtrlOpen(true)}>
+              <span>能力管控</span>
+              <span className="dim">→</span>
+            </button>
+            {deleteConfirm ? (
+              <span className="row" style={{ gap: 6 }}>
+                <button className="btn btn-danger" onClick={() => delAgent.mutate(a.agent_id)}>确认删除</button>
+                <button className="btn btn-ghost" onClick={() => setDeleteConfirm(false)}>取消</button>
+              </span>
+            ) : (
+              <button className="btn btn-ghost" style={{ color: 'var(--block)' }} onClick={() => setDeleteConfirm(true)}>删除</button>
+            )}
+          </div>
+          {deleteConfirm && <div className="small dim">删除后再次接入将作为新 Agent 出现（历史已清）；若期间再发消息，网关会自动重建该 ID。</div>}
 
           <div>
             <div className="h-sec" style={{ marginBottom: 8 }}>最近活动</div>

@@ -40,6 +40,7 @@ export const api = {
   agentDetail: (id: string) => get<any>(`/api/agents/detail?agent_id=${encodeURIComponent(id)}`),
   agentHistory: (id: string) => get<any>(`/api/agents/history?agent_id=${encodeURIComponent(id)}`),
   deleteAgent: (id: string) => del(`/api/agents/delete?agent_id=${encodeURIComponent(id)}`),
+  setAlias: (id: string, alias: string) => post(`/api/agents/action`, { agent_id: id, alias }),
   policies: (agentId?: string) => get<any[]>(`/api/policies${agentId ? `?agent_id=${agentId}` : '?all=true'}`),
   upsertPolicy: (body: any) => put('/api/policies', body),
   deletePolicy: (id: number) => del(`/api/policies?id=${id}`),
