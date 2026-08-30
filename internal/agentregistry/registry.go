@@ -183,6 +183,20 @@ func (r *Registry) Upsert(in Record) error {
 	if in.AgentID == "" {
 		return fmt.Errorf("agent_id is required")
 	}
+	// Normalize generic "本机 *" aliases — the template default that looks wrong
+	// for remote machines when viewed from the gateway's perspective.
+	if strings.HasPrefix(strings.TrimSpace(in.Alias), "本机") {
+		if strings.TrimSpace(in.MachineName) != "" {
+			// Prefer machine_name + agent_type, e.g. "macdeMacBook-Air.local · Codex"
+			label := in.MachineName
+			if at := strings.TrimSpace(in.AgentType); at != "" && !strings.Contains(label, at) {
+				label = label + " · " + at
+			}
+			in.Alias = label
+		} else {
+			in.Alias = in.AgentID
+		}
+	}
 	if in.DeclaredModel == "" {
 		in.DeclaredModel = in.Model
 	}

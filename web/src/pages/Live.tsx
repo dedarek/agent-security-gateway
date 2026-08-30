@@ -50,7 +50,6 @@ export default function Live() {
         <div className="row-between" style={{ marginBottom: 16 }}>
           <div>
             <h1 className="h-page">实时台</h1>
-            <div className="small dim">管控第一 · 接入 Agent 的安全中控</div>
           </div>
           <span className="badge badge-allow">SSE LIVE</span>
         </div>
@@ -86,7 +85,6 @@ export default function Live() {
 
         <div className="row-between" style={{ marginBottom: 10 }}>
           <div className="h-sec">已接入 Agent <span className="dim">({real.length})</span></div>
-          <div className="small dim">点卡片看详情 · 配策略 · 查日志</div>
         </div>
         {isLoading && <div className="row" style={{ gap: 14 }}><Skeleton h={150} w={320} /><Skeleton h={150} w={320} /></div>}
         {!isLoading && real.length === 0 && (
@@ -116,33 +114,47 @@ function Kpi({ label, value, color }: { label: string; value: number; color?: st
 
 function AgentBigCard({ a, onOpen }: { a: Agent; onOpen: () => void }) {
   const observed = (a as any).observed_model
+  const alias = displayAlias(a)
+  const machine = (a as any).machine_name || ''
   return (
-    <button onClick={onOpen} className="card card-hover" style={{ textAlign: 'left', cursor: 'pointer', color: 'inherit', font: 'inherit', padding: '16px 18px', border: '1px solid var(--line)' }}>
-      <div className="row-between" style={{ marginBottom: 8 }}>
+    <button onClick={onOpen} className="card card-hover" style={{ textAlign: 'left', cursor: 'pointer', color: 'inherit', font: 'inherit', padding: '16px 18px', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div className="row-between" style={{ alignItems: 'flex-start' }}>
         <div className="row" style={{ gap: 10, minWidth: 0 }}>
           <span style={{ width: 38, height: 38, borderRadius: 10, background: 'var(--brand)', color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 16, flexShrink: 0 }}>
-            {(a.alias || a.agent_id).slice(0, 1).toUpperCase()}
+            {alias.slice(0, 1).toUpperCase()}
           </span>
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: 15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.alias || a.agent_id}</div>
-            <div className="small dim mono" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.agent_id}</div>
+            <div style={{ fontWeight: 800, fontSize: 15, lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{alias}</div>
+            <div className="small mono" style={{ color: 'var(--fg-2)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.agent_id}</div>
+            {machine && <div className="small mono" style={{ color: 'var(--fg-2)', fontSize: 11 }}>{machine}</div>}
           </div>
         </div>
-        <span className="row" style={{ gap: 6, flexShrink: 0 }}><StatusDot status={a.status} /><span className="small muted">{a.status}</span></span>
+        <span className="row" style={{ gap: 6, flexShrink: 0, paddingTop: 2 }}><StatusDot status={a.status} /><span className="small muted" style={{ textTransform: 'uppercase', fontWeight: 600 }}>{a.status}</span></span>
       </div>
-      <div className="row small" style={{ gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
-        {a.agent_type && <span className="chip">{a.agent_type}</span>}
-        {a.model && <span className="chip">{a.model}</span>}
-        {a.provider && <span className="chip">{a.provider}</span>}
-        {observed ? <span className="chip" style={{ color: 'var(--allow)' }}>observed</span> : null}
+      <div className="row small" style={{ gap: 6, flexWrap: 'wrap' }}>
+        {a.agent_type && <span className="chip" style={{ background: 'var(--brand)', color: '#fff', borderColor: 'var(--brand)', fontWeight: 600 }}>{a.agent_type}</span>}
+        {a.model && <span className="chip" style={{ background: 'var(--bg-2)', borderColor: 'var(--line)', fontWeight: 600 }}>{a.model}</span>}
+        {a.provider && a.provider !== a.model && <span className="chip" style={{ color: 'var(--fg-2)', borderStyle: 'dashed' }}>{a.provider}</span>}
+        {observed ? <span className="chip" style={{ color: 'var(--allow)', borderColor: 'var(--allow)', background: 'rgba(30,142,62,.06)' }}>observed</span> : null}
       </div>
-      <div className="row-between small" style={{ color: 'var(--fg-2)' }}>
+      <div className="row-between small" style={{ color: 'var(--fg-2)', borderTop: '1px solid var(--line)', paddingTop: 8 }}>
         <span>{a.session_count ?? a.session_ids?.length ?? 0} 会话</span>
         <span className="mono">{a.ip || '-'}</span>
       </div>
-      <div className="small" style={{ color: 'var(--brand)', marginTop: 8, fontWeight: 600 }}>查看详情与管控 →</div>
+      <div className="small" style={{ color: 'var(--brand)', fontWeight: 600 }}>查看详情与管控 →</div>
     </button>
   )
+}
+
+function displayAlias(a: Agent): string {
+  const raw = (a.alias || '').trim()
+  if (raw && !raw.startsWith('本机')) return raw
+  const mn = ((a as any).machine_name || '').trim()
+  if (mn) {
+    const at = (a.agent_type || '').trim()
+    return at && !mn.includes(at) ? `${mn} · ${at}` : mn
+  }
+  return raw || a.agent_id
 }
 
 function AgentDrawer({ agentId, onClose, onDeepDive }: { agentId: string | null; onClose: () => void; onDeepDive: (id: string) => void }) {
@@ -153,6 +165,7 @@ function AgentDrawer({ agentId, onClose, onDeepDive }: { agentId: string | null;
     mutationFn: (body: any) => api.upsertPolicy(body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['policies'] }),
   })
+  const [ctrlOpen, setCtrlOpen] = useState(false)
   if (!agentId) return null
   const a = data?.agent
   const chain = data?.chain || []
@@ -169,7 +182,8 @@ function AgentDrawer({ agentId, onClose, onDeepDive }: { agentId: string | null;
     upsert.mutate({ agent_id: agentId, rule_id: rule, action, axis: 'permission', enabled: true })
 
   return (
-    <Drawer open={!!agentId} onClose={onClose} title={a ? (a.alias || a.agent_id) : '加载中…'} width={440}>
+    <>
+    <Drawer open={!!agentId} onClose={onClose} title={a ? displayAlias(a) : '加载中…'} width={440}>
       {isLoading && <Skeleton h={200} />}
       {a && (
         <div className="col" style={{ gap: 16 }}>
@@ -189,40 +203,10 @@ function AgentDrawer({ agentId, onClose, onDeepDive }: { agentId: string | null;
             <dt>最后活动</dt><dd className="small">{a.last_activity ? new Date(a.last_activity).toLocaleString('zh-CN') : '-'}</dd>
           </dl>
 
-          {/* 能力管控 — 从独立 /control 页搬入抽屉 */}
-          <div>
-            <div className="h-sec" style={{ marginBottom: 8 }}>能力管控 <span className="dim" style={{ fontWeight: 400 }}>· 改动立即生效</span></div>
-            <div className="small dim" style={{ marginBottom: 10 }}>允许 = 直接放行 · 确认 = 需人工确认 · 拦截 = 直接阻断</div>
-            <div className="col" style={{ gap: 8 }}>
-              {CAPS.map((c) => {
-                const cur = actionFor(c.rule_id)
-                return (
-                  <div key={c.rule_id} className="card" style={{ padding: '10px 12px' }}>
-                    <div className="row-between" style={{ gap: 8 }}>
-                      <div style={{ minWidth: 0 }}>
-                        <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
-                          <span style={{ fontWeight: 600, fontSize: 13 }}>{c.label}</span>
-                          {c.l2 && <span className="badge badge-confirm" style={{ fontSize: 10 }}>L2 高危</span>}
-                          <span className="chip mono small">{c.rule_id}</span>
-                        </div>
-                        <div className="small dim" style={{ marginTop: 2 }}>{c.desc}</div>
-                      </div>
-                      <div className="seg" style={{ flexShrink: 0 }}>
-                        {ACTIONS.map((act) => (
-                          <button key={act}
-                            className={`seg-item ${cur === act ? 'on' : ''}`}
-                            style={cur === act ? segOnColor(act) : undefined}
-                            onClick={() => setAction(c.rule_id, act)}>
-                            {act === 'allow' ? '允许' : act === 'confirm' ? '确认' : '拦截'}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
+          <button className="btn" style={{ justifyContent: 'space-between' }} onClick={() => setCtrlOpen(true)}>
+            <span>能力管控</span>
+            <span className="dim">→</span>
+          </button>
 
           <div>
             <div className="h-sec" style={{ marginBottom: 8 }}>最近活动</div>
@@ -243,6 +227,39 @@ function AgentDrawer({ agentId, onClose, onDeepDive }: { agentId: string | null;
         </div>
       )}
     </Drawer>
+    <Drawer open={ctrlOpen} onClose={() => setCtrlOpen(false)} title={a ? `${displayAlias(a)} · 能力管控` : '能力管控'} width={440}>
+      <div className="col" style={{ gap: 8 }}>
+        <div className="small dim" style={{ marginBottom: 4 }}>允许 = 直接放行 · 确认 = 需人工确认 · 拦截 = 直接阻断</div>
+        {CAPS.map((c) => {
+          const cur = actionFor(c.rule_id)
+          return (
+            <div key={c.rule_id} className="card" style={{ padding: '10px 12px' }}>
+              <div className="row-between" style={{ gap: 8 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+                    <span style={{ fontWeight: 600, fontSize: 13 }}>{c.label}</span>
+                    {c.l2 && <span className="badge badge-confirm" style={{ fontSize: 10 }}>L2 高危</span>}
+                    <span className="chip mono small">{c.rule_id}</span>
+                  </div>
+                  <div className="small dim" style={{ marginTop: 2 }}>{c.desc}</div>
+                </div>
+                <div className="seg" style={{ flexShrink: 0 }}>
+                  {ACTIONS.map((act) => (
+                    <button key={act}
+                      className={`seg-item ${cur === act ? 'on' : ''}`}
+                      style={cur === act ? segOnColor(act) : undefined}
+                      onClick={() => setAction(c.rule_id, act)}>
+                      {act === 'allow' ? '允许' : act === 'confirm' ? '确认' : '拦截'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </Drawer>
+    </>
   )
 }
 

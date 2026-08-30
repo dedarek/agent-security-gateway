@@ -24,7 +24,7 @@ function Shell() {
             <span style={{ width: 28, height: 28, borderRadius: 6, background: '#ff9900', display: 'grid', placeItems: 'center', color: '#232f3e', fontWeight: 900, fontSize: 15 }}>A</span>
             <span>ASG 控制台</span>
           </div>
-          <div style={{ fontSize: 10, color: '#9ba7b4', marginTop: 5, letterSpacing: '0.04em' }}>SaaS · 管控第一 · 可见性第二</div>
+          <div style={{ fontSize: 10, color: '#9ba7b4', marginTop: 5, letterSpacing: '0.04em' }}>SaaS</div>
         </div>
         <nav style={{ flex: 1, padding: '10px 8px' }}>
           {NAV.map((n) => (
