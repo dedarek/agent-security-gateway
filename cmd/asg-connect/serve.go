@@ -79,13 +79,19 @@ type llmProxy struct {
 }
 
 func (p *llmProxy) handleLLM(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
+	body, err := copyRequest(r)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
 
 	prov, upstreamModel, routeErr := p.route(body)
+	if routeErr == nil {
+		setObservedProvider(prov.Name)
+		if upstreamModel != "" {
+			observedModel.Store(upstreamModel)
+		}
+	}
 	if routeErr != nil {
 		// quota protection: deny non-free models before they hit the provider
 		w.Header().Set("Content-Type", "application/json")

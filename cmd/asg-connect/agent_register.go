@@ -86,9 +86,28 @@ func collectAgentRegistration(cfg ProbeConfig) agentRegistration {
 		agentType = "unknown"
 	}
 	model, provider := "", ""
-	if len(cfg.Providers) > 0 {
+	// Prefer observed traffic over static config (sidecar sniffing).
+	if om := getObservedModel(); om != "" {
+		model = om
+		if op := getObservedProvider(); op != "" {
+			provider = op
+		} else if len(cfg.Providers) > 0 {
+			provider = cfg.Providers[0].Name
+		}
+	} else if len(cfg.Providers) > 0 {
 		provider = cfg.Providers[0].Name
 		model = cfg.Providers[0].DefaultModel
+	}
+	// Also allow provider-only observation (e.g. Responses API where model captured separately)
+	if model != "" && provider == "" {
+		if op := getObservedProvider(); op != "" {
+			provider = op
+		}
+	}
+	if provider == "" && model == "" {
+		if op := getObservedProvider(); op != "" {
+			provider = op
+		}
 	}
 	return agentRegistration{
 		SessionID:   agentID,

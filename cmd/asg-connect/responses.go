@@ -18,11 +18,12 @@ import (
 // translates responses->chat, forwards, and translates the reply back.
 func (p *llmProxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
-	body, err := io.ReadAll(r.Body)
+	body, err := copyRequest(r)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
+	// capture already done by copyRequest; ensure provider will be set after route
 
 	var in struct {
 		Model        string           `json:"model"`
@@ -118,6 +119,12 @@ func (p *llmProxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	prov, _, routeErr := p.route(mustJSON(chat))
+	if routeErr == nil {
+		setObservedProvider(prov.Name)
+		if in.Model != "" {
+			observedModel.Store(in.Model)
+		}
+	}
 	if routeErr != nil {
 		http.Error(w, `{"error":{"type":"quota_protection","message":"model not allowed"}}`, http.StatusForbidden)
 		return

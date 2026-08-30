@@ -14,7 +14,7 @@ import (
 // response back to Anthropic format. This lets Claude Code work with ANY
 // OpenAI-compatible endpoint through the probe.
 func (p *llmProxy) handleAnthropicBridge(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
+	body, err := copyRequest(r)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
@@ -36,6 +36,15 @@ func (p *llmProxy) handleAnthropicBridge(w http.ResponseWriter, r *http.Request)
 
 	// Route to provider
 	prov, upstreamModel, routeErr := p.route([]byte(fmt.Sprintf(`{"model":"%s"}`, req.Model)))
+	if routeErr == nil {
+		setObservedProvider(prov.Name)
+		if req.Model != "" {
+			observedModel.Store(req.Model)
+		}
+		if upstreamModel != "" && upstreamModel != req.Model {
+			observedModel.Store(upstreamModel)
+		}
+	}
 	if routeErr != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
