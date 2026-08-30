@@ -18,6 +18,26 @@ func osOpenAppend(path string) (*os.File, error) {
 	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 }
 
+// serveDryRun validates the universal/legacy config and prints parsed result without starting the probe.
+func serveDryRun(cfgPath string) error {
+	cfg, err := loadProbeConfig(cfgPath)
+	if err != nil {
+		return err
+	}
+	out := map[string]any{
+		"config_path":    cfgPath,
+		"universal_path": cfg.UniversalPath,
+		"listen":         cfg.Listen,
+		"hub_url":        cfg.HubURL,
+		"tenant_key_set": cfg.TenantKey != "",
+		"providers":      len(cfg.Providers),
+		"dry_run":        true,
+	}
+	b, _ := json.MarshalIndent(out, "", "  ")
+	fmt.Println(string(b))
+	return nil
+}
+
 // serve runs the local proxy: an OpenAI/Anthropic-compatible transparent
 // forwarder with full traffic capture, plus a periodic flusher.
 func serve(cfgPath string) error {

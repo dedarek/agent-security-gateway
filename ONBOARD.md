@@ -2,6 +2,15 @@
 
 > 把本文档全文粘贴给你的 AI agent（Claude Code / Codex / Cursor 等），它会自动完成全部接入和验证。
 
+> **推荐：通用一键接入（harness-agnostic）** — 任意支持 OpenAI 兼容 API + MCP 的 agent，一条命令完成：
+> ```bash
+> sh scripts/asg-universal-install.sh --hub-url http://172.16.26.253:8090 --tenant-key "***" --listen 127.0.0.1:8181
+> # 干跑校验（不写文件、不起端口）：
+> sh scripts/asg-universal-install.sh --hub-url http://172.16.26.253:8090 --tenant-key "***" --dry-run
+> # 底层等价：asg-connect serve --dry-run -config ~/.config/asg/universal.json
+> ```
+> 脚本会：① 写入 `~/.config/asg/universal.json`（`hub_url / tenant_key / listen` 三字段），② 写入通用 `~/.config/asg/mcp.json`（`{"mcpServers":{"asg":{"url":"http://127.0.0.1:8181/mcp"}}}`，不写 `~/.claude / ~/.cursor` 等 harness 专属文件），③ 后台启动 `asg-connect serve -config ~/.config/asg/universal.json`。详见 `docs/UNIVERSAL-ONBOARDING.md`。下方手填 `connect.yaml` 为兼容旧路径。
+
 ---
 
 ## 任务：接入公司部署的 Agent Security Gateway
@@ -25,6 +34,8 @@ curl -s http://127.0.0.1:8181/healthz
 如果返回 `ok`，跳到步骤 3。如果失败或超时，继续步骤 2。
 
 ### 步骤 2 — 安装并启动探针
+
+> **首选通用一键**：`sh scripts/asg-universal-install.sh --hub-url http://172.16.26.253:8090 --tenant-key "***"`（见顶部）。下方为手填 `connect.yaml` 的兼容旧路径。
 
 **2a. 克隆仓库（如果还没有）：**
 
@@ -71,7 +82,13 @@ curl -s http://127.0.0.1:8181/healthz
 
 ### 步骤 3 — 将你的 MCP 配置指向网关
 
-找到你当前的 MCP 配置文件：
+通用路径（推荐）：安装脚本已写入 `~/.config/asg/mcp.json`：
+```json
+{"mcpServers":{"asg":{"url":"http://127.0.0.1:8181/mcp"}}}
+```
+任意 MCP 客户端直接读取该文件即可，无需按 harness 分支写 `~/.claude/settings.json` / `.cursor/mcp.json` / `~/.codex/config.toml`。旧 harness 专属路径仍兼容，下方为回退说明。
+
+找到你当前的 MCP 配置文件（回退）：
 - Claude Code: `~/.claude/settings.json` 或项目 `.mcp.json`
 - Cursor: `.cursor/mcp.json`
 - Codex: `~/.codex/config.toml`

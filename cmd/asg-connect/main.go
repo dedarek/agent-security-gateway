@@ -27,7 +27,14 @@ func main() {
 	case "serve":
 		fs := flag.NewFlagSet("serve", flag.ExitOnError)
 		cfgPath := fs.String("config", "connect.yaml", "probe config path")
+		dryRun := fs.Bool("dry-run", false, "validate config and exit without starting probe")
 		fs.Parse(os.Args[2:])
+		if *dryRun {
+			if err := serveDryRun(*cfgPath); err != nil {
+				fail(err)
+			}
+			return
+		}
 		if err := serve(*cfgPath); err != nil {
 			fail(err)
 		}
@@ -54,7 +61,7 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `asg-connect — Agent Security Gateway local probe
 
 Usage:
-  asg-connect serve  [-config connect.yaml]   run the local proxy + reporter
+  asg-connect serve  [-config connect.yaml] [--dry-run]  run the local proxy + reporter
   asg-connect check  < hook-payload.json     sync verdict for an agent hook
   asg-connect init    -app claude-code|codex  write agent config to route via probe
 `)
