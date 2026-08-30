@@ -1,10 +1,11 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 
-export function Drawer({ open, onClose, title, children }: {
+export function Drawer({ open, onClose, title, children, width }: {
   open: boolean
   onClose: () => void
   title?: ReactNode
   children: ReactNode
+  width?: number
 }) {
   const bodyRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -17,7 +18,7 @@ export function Drawer({ open, onClose, title, children }: {
   return (
     <>
       <div className="drawer-mask" onClick={onClose} />
-      <div className="drawer slide-in" style={{ animation: 'none', transform: 'translateX(0)', transition: 'transform 260ms var(--ease)' }}>
+      <div className="drawer slide-in" style={{ animation: 'none', transform: 'translateX(0)', transition: 'transform 260ms var(--ease)', width: width ? `${width}px` : undefined, maxWidth: '90vw' }}>
         <div className="drawer-head row-between">
           <div style={{ fontWeight: 700, fontSize: 14 }}>{title}</div>
           <button className="btn btn-ghost" onClick={onClose} aria-label="关闭">✕</button>

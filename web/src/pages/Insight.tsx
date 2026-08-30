@@ -1,7 +1,6 @@
-import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
-import { OntoInsight } from '../components/OntoInsight'
 import { VerdictBadge } from '../components/VerdictBadge'
 import { EmptyState } from '../components/EmptyState'
 import { SkeletonRows } from '../components/Skeleton'
@@ -25,7 +24,7 @@ export default function Insight() {
         <TabBtn id="sessions" cur={tab} set={setTab} label="会话" />
       </div>
       <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-        {tab === 'graph' && <OntoInsight />}
+        {tab === 'graph' && <GraphLaunch />}
         {tab === 'findings' && <Findings />}
         {tab === 'sessions' && <Sessions focus={focus} />}
       </div>
@@ -35,6 +34,39 @@ export default function Insight() {
 
 function TabBtn({ id, cur, set, label }: { id: Tab; cur: Tab; set: (t: Tab) => void; label: string }) {
   return <button className={`tab ${cur === id ? 'tab-active' : ''}`} onClick={() => set(id)}>{label}</button>
+}
+
+/** Semantica 大图谱改跳转新窗口，不再 iframe 嵌入（iframe+FA2 worker 会卡死）。 */
+function GraphLaunch() {
+  const { data: status } = useQuery({ queryKey: ['status'], queryFn: api.status, refetchInterval: 10000 })
+  const kg = status?.kg || {}
+  const ready = kg.graph_ready
+  const n = kg.node_count ?? kg.entities ?? 0
+  return (
+    <div style={{ padding: 22 }}>
+      <div className="card card-pad">
+        <div className="h-sec" style={{ marginBottom: 6 }}>知识图谱 · Semantica</div>
+        <div className="small dim" style={{ marginBottom: 14 }}>
+          完整图谱在 Semantica Explorer 中打开（独立窗口，Sigma WebGL + ForceAtlas2 连续布局，不占用控制台页面）。
+          控制台内不再嵌入，避免 iframe 卡死。
+        </div>
+        <div className="row" style={{ gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
+          <span className={`badge ${ready ? 'badge-allow' : 'badge-confirm'}`}>{ready ? 'graph ready' : 'warming up'}</span>
+          <span className="small dim">{n} 节点 · 来源：本体导出 / 行为事件</span>
+        </div>
+        <div className="row" style={{ gap: 10 }}>
+          <a className="btn btn-primary" href="/explorer/" target="_blank" rel="noreferrer">在 Semantica 中打开 →</a>
+          <span className="small dim">新窗口打开 /explorer/（经网关代理，无需额外端口）</span>
+        </div>
+        <div className="small dim" style={{ marginTop: 12 }}>
+          直连地址：<a href="http://127.0.0.1:8091/" target="_blank" rel="noreferrer">127.0.0.1:8091</a>（仅本机）
+        </div>
+      </div>
+      <div className="small dim" style={{ marginTop: 12 }}>
+        图谱数据来自 <code>/api/onto/graph</code> 统一本体；节点类型与 taint 边在 Semantica 中已按本体配色与形状区分。
+      </div>
+    </div>
+  )
 }
 
 function Findings() {

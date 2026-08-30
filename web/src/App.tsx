@@ -4,7 +4,6 @@ import { useEventStream } from './lib/sse'
 import Live from './pages/Live'
 import Fleet from './pages/Fleet'
 import AgentDetail from './pages/AgentDetail'
-import Control from './pages/Control'
 import Insight from './pages/Insight'
 
 const qc = new QueryClient()
@@ -12,7 +11,6 @@ const qc = new QueryClient()
 const NAV = [
   { to: '/', label: '实时台', end: true },
   { to: '/fleet', label: '舰队' },
-  { to: '/control', label: '管控' },
   { to: '/insight', label: '洞察' },
 ]
 
@@ -49,7 +47,6 @@ function Shell() {
           <Route path="/" element={<Live />} />
           <Route path="/fleet" element={<Fleet />} />
           <Route path="/fleet/:id" element={<AgentDetail />} />
-          <Route path="/control" element={<Control />} />
           <Route path="/insight" element={<Insight />} />
         </Routes>
       </main>

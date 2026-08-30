@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import type { Agent } from '../lib/types'
@@ -10,12 +10,21 @@ import { Skeleton } from '../components/Skeleton'
 import { HealthBar } from '../components/HealthBar'
 import { Drawer } from '../components/Drawer'
 import { Donut } from '../components/charts/Donut'
-import { HBars } from '../components/charts/HBars'
 import { Gauge } from '../components/charts/Gauge'
 import { Trend } from '../components/charts/Trend'
 
+const CAPS: { rule_id: string; label: string; desc: string; l2?: boolean }[] = [
+  { rule_id: 'Bash', label: 'Shell 执行', desc: '跑任意 shell 命令（高危）', l2: true },
+  { rule_id: 'WebFetch', label: '网络外发', desc: '向外部 URL 发请求（数据外泄风险）', l2: true },
+  { rule_id: 'Write', label: '写文件', desc: '创建/覆盖文件' },
+  { rule_id: 'Edit', label: '改文件', desc: '编辑已有文件' },
+  { rule_id: 'Read', label: '读文件', desc: '读取本地文件（含敏感路径检测）' },
+  { rule_id: 'WebSearch', label: '联网搜索', desc: '发起网络搜索' },
+]
+const ACTIONS = ['allow', 'confirm', 'block'] as const
+
 /** Live — GCP 中控大屏风。顶部 KPI 条 + 趋势/构成，下方 agent 大卡片网格。
- * 点卡弹抽屉（信息+操作），再点「查看完整链路」才下钻日志明细。 */
+ * 点卡弹抽屉（信息+管控+操作），再点「查看完整链路」才下钻日志明细。 */
 export default function Live() {
   const nav = useNavigate()
   const { data: agents, isLoading } = useQuery({ queryKey: ['agents'], queryFn: api.agents, refetchInterval: 8000 })
@@ -46,7 +55,6 @@ export default function Live() {
           <span className="badge badge-allow">SSE LIVE</span>
         </div>
 
-        {/* KPI 大条 */}
         <div className="row" style={{ gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
           <Kpi label="拦截 BLOCK" value={blocks} color="var(--block)" />
           <Kpi label="待确认 CONFIRM" value={confirms} color="var(--confirm)" />
@@ -56,7 +64,6 @@ export default function Live() {
           <Kpi label="KG 节点" value={kg.node_count ?? kg.entities ?? 0} />
         </div>
 
-        {/* 构成 + 威胁 + 趋势 三联 */}
         <div style={{ display: 'grid', gridTemplateColumns: '240px 240px 1fr', gap: 14, marginBottom: 16 }}>
           <div className="card card-pad col" style={{ alignItems: 'center', gap: 6 }}>
             <div className="h-sec" style={{ alignSelf: 'flex-start' }}>裁决分布</div>
@@ -77,10 +84,9 @@ export default function Live() {
           </div>
         </div>
 
-        {/* Agent 大卡片网格 */}
         <div className="row-between" style={{ marginBottom: 10 }}>
           <div className="h-sec">已接入 Agent <span className="dim">({real.length})</span></div>
-          <div className="small dim">点卡片看详情与操作</div>
+          <div className="small dim">点卡片看详情 · 配策略 · 查日志</div>
         </div>
         {isLoading && <div className="row" style={{ gap: 14 }}><Skeleton h={150} w={320} /><Skeleton h={150} w={320} /></div>}
         {!isLoading && real.length === 0 && (
@@ -94,7 +100,6 @@ export default function Live() {
         <div style={{ height: 20 }} />
       </div>
 
-      {/* 抽屉：agent 信息 + 操作 */}
       <AgentDrawer agentId={drawerFor} onClose={() => setDrawerFor(null)} onDeepDive={(id) => { setDrawerFor(null); nav(`/fleet/${encodeURIComponent(id)}`) }} />
     </div>
   )
@@ -135,28 +140,45 @@ function AgentBigCard({ a, onOpen }: { a: Agent; onOpen: () => void }) {
         <span>{a.session_count ?? a.session_ids?.length ?? 0} 会话</span>
         <span className="mono">{a.ip || '-'}</span>
       </div>
-      <div className="small" style={{ color: 'var(--brand)', marginTop: 8, fontWeight: 600 }}>查看详情 →</div>
+      <div className="small" style={{ color: 'var(--brand)', marginTop: 8, fontWeight: 600 }}>查看详情与管控 →</div>
     </button>
   )
 }
 
 function AgentDrawer({ agentId, onClose, onDeepDive }: { agentId: string | null; onClose: () => void; onDeepDive: (id: string) => void }) {
+  const qc = useQueryClient()
   const { data, isLoading } = useQuery({ queryKey: ['agent-detail', agentId], queryFn: () => api.agentDetail(agentId!), enabled: !!agentId, refetchInterval: 4000 })
+  const { data: policies } = useQuery({ queryKey: ['policies'], queryFn: () => api.policies(), enabled: !!agentId })
+  const upsert = useMutation({
+    mutationFn: (body: any) => api.upsertPolicy(body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['policies'] }),
+  })
   if (!agentId) return null
   const a = data?.agent
   const chain = data?.chain || []
   const recent = chain.slice().reverse().slice(0, 6)
+  const pols: any[] = policies || []
+  const actionFor = (rule: string): string => {
+    const per = pols.find((p) => p.agent_id === agentId && p.rule_id === rule)
+    if (per) return per.action
+    const glob = pols.find((p) => !p.agent_id && p.rule_id === rule)
+    if (glob) return glob.action
+    return 'allow'
+  }
+  const setAction = (rule: string, action: string) =>
+    upsert.mutate({ agent_id: agentId, rule_id: rule, action, axis: 'permission', enabled: true })
 
   return (
-    <Drawer open={!!agentId} onClose={onClose} title={a ? (a.alias || a.agent_id) : '加载中…'}>
+    <Drawer open={!!agentId} onClose={onClose} title={a ? (a.alias || a.agent_id) : '加载中…'} width={440}>
       {isLoading && <Skeleton h={200} />}
       {a && (
-        <div className="col" style={{ gap: 14 }}>
+        <div className="col" style={{ gap: 16 }}>
           <div className="row" style={{ gap: 10 }}>
             <StatusDot status={a.status} />
             <span className="small muted">{a.status}</span>
             {a.observed_model ? <span className="badge badge-allow">gateway-observed</span> : <span className="badge" style={{ color: 'var(--fg-2)', borderColor: 'var(--line)' }}>self-reported</span>}
           </div>
+
           <dl className="kv">
             <dt>Agent ID</dt><dd className="mono">{a.agent_id}</dd>
             <dt>类型</dt><dd>{a.agent_type || '-'}</dd>
@@ -166,6 +188,41 @@ function AgentDrawer({ agentId, onClose, onDeepDive }: { agentId: string | null;
             <dt>会话</dt><dd>{a.session_count ?? a.session_ids?.length ?? 0}</dd>
             <dt>最后活动</dt><dd className="small">{a.last_activity ? new Date(a.last_activity).toLocaleString('zh-CN') : '-'}</dd>
           </dl>
+
+          {/* 能力管控 — 从独立 /control 页搬入抽屉 */}
+          <div>
+            <div className="h-sec" style={{ marginBottom: 8 }}>能力管控 <span className="dim" style={{ fontWeight: 400 }}>· 改动立即生效</span></div>
+            <div className="small dim" style={{ marginBottom: 10 }}>允许 = 直接放行 · 确认 = 需人工确认 · 拦截 = 直接阻断</div>
+            <div className="col" style={{ gap: 8 }}>
+              {CAPS.map((c) => {
+                const cur = actionFor(c.rule_id)
+                return (
+                  <div key={c.rule_id} className="card" style={{ padding: '10px 12px' }}>
+                    <div className="row-between" style={{ gap: 8 }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+                          <span style={{ fontWeight: 600, fontSize: 13 }}>{c.label}</span>
+                          {c.l2 && <span className="badge badge-confirm" style={{ fontSize: 10 }}>L2 高危</span>}
+                          <span className="chip mono small">{c.rule_id}</span>
+                        </div>
+                        <div className="small dim" style={{ marginTop: 2 }}>{c.desc}</div>
+                      </div>
+                      <div className="seg" style={{ flexShrink: 0 }}>
+                        {ACTIONS.map((act) => (
+                          <button key={act}
+                            className={`seg-item ${cur === act ? 'on' : ''}`}
+                            style={cur === act ? segOnColor(act) : undefined}
+                            onClick={() => setAction(c.rule_id, act)}>
+                            {act === 'allow' ? '允许' : act === 'confirm' ? '确认' : '拦截'}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
 
           <div>
             <div className="h-sec" style={{ marginBottom: 8 }}>最近活动</div>
@@ -179,14 +236,20 @@ function AgentDrawer({ agentId, onClose, onDeepDive }: { agentId: string | null;
             ))}
           </div>
 
-          <div className="col" style={{ gap: 8, marginTop: 4 }}>
+          <div className="col" style={{ gap: 8 }}>
             <button className="btn btn-primary" onClick={() => onDeepDive(a.agent_id)}>查看完整链路与日志 →</button>
-            <button className="btn" onClick={() => { window.location.href = `/control` }}>配置它的能力策略 →</button>
+            <div className="small dim">完整链路在舰队详情页；含工具调用时间线与裁决证据。</div>
           </div>
         </div>
       )}
     </Drawer>
   )
+}
+
+function segOnColor(act: string): React.CSSProperties {
+  if (act === 'block') return { background: 'var(--block)', color: '#fff' }
+  if (act === 'confirm') return { background: 'var(--confirm)', color: '#fff' }
+  return { background: 'var(--allow)', color: '#fff' }
 }
 
 function isRealAgent(a: Agent): boolean {
