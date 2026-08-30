@@ -134,7 +134,11 @@ function AgentBigCard({ a, onOpen }: { a: Agent; onOpen: () => void }) {
       </div>
       <div className="row small" style={{ gap: 6, flexWrap: 'wrap' }}>
         {a.agent_type && (
-          logoFor(a.agent_type) ? <BrandChip name={a.agent_type} /> : <span className="chip" style={{ background: 'var(--brand)', color: '#fff', borderColor: 'var(--brand)', fontWeight: 600 }}>{a.agent_type}</span>
+          (() => {
+            const isCustom = a.agent_type.toLowerCase() === 'custom'
+            if (isCustom) return <span className="chip" title="通用接入（harness-agnostic, agent_type=custom）" style={{ background: 'var(--bg-2)', borderStyle: 'dashed', color: 'var(--fg-1)', fontWeight: 600 }}>通用 · custom</span>
+            return logoFor(a.agent_type) ? <BrandChip name={a.agent_type} /> : <span className="chip" style={{ background: 'var(--brand)', color: '#fff', borderColor: 'var(--brand)', fontWeight: 600 }}>{a.agent_type}</span>
+          })()
         )}
         {a.model ? (
           logoFor(a.model) ? <BrandChip name={a.model} style={{ background: 'var(--bg-2)', borderColor: 'var(--line)' }} /> : <span className="chip" style={{ background: 'var(--bg-2)', borderColor: 'var(--line)', fontWeight: 600 }}>{a.model}</span>

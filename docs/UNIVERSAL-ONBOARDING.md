@@ -172,3 +172,54 @@ type ProbeConfig struct {
 pkill asg-connect 2>/dev/null; rm -rf ~/.config/asg/universal.json
 # 旧 harness 专属 hook 残留不影响通用路径；如需清理按对应 harness 的 settings.json 手动移除 asg 段即可
 ```
+
+---
+
+## 9. 控制台展示（`agent_type=custom` 通用接入）
+
+> **前端构建校验（2026-08-30）**：`npm --prefix web run build` 成功（`vite v8.2.2, 101 modules, 324.77 kB`），`web/dist` 与 `internal/webui/dist` 哈希一致（`go:embed all:dist`），`wsl go vet ./...` 通过。通用 `custom` 类型在控制台按“通用”样式展示，模型/provider 按品牌徽标展示。
+
+### 9.1 Live 实时台 — 通用 agent 卡片
+
+- **类型芯片**：`agent_type=custom` 显示为 `通用 · custom`（dashed 中性样式，`title="通用接入（harness-agnostic, agent_type=custom）"`），与 `claude-code / opencode / cursor / codex` 的品牌 `BrandChip` 区分（后者带 SVG logo）。
+- **模型芯片**：嗅探到的 `observed_model / model` 按 `web/src/assets/logos/` 15 品牌映射渲染（`openai / anthropic / google(gemini) / grok / zhipu(glm) / kimi(moonshot) / qwen / minimax / deepseek / tencent_hunyuan ...`），命中时为带 logo 的 `BrandChip`，未命中时为文本芯片；未上报时显示 `模型未上报`（dashed）。
+- **Provider 芯片**：同模型映射，`provider !== model` 时追加虚线芯片。
+- **来源徽章**：`observed`（绿色）表示网关由真实 `model` 字段嗅探，`self-reported` 为旧 `connect.yaml` 回退。
+
+```
+[通用 · custom] [BrandChip: gpt-4o/openai-logo] [openai dashed] observed
+[通用 · custom] [BrandChip: qwen3/logo] observed
+[claude-code BrandChip] [anthropic logo] ...
+```
+
+### 9.2 舰队页与详情
+
+- 舰队表格“模型”列同样通过 `logoFor(model||provider)` 渲染 16px `BrandLogo`。
+- 详情页标题区同 Live 卡片逻辑。
+
+### 9.3 截图占位
+
+> 截图取自 `http://127.0.0.1:8090/`（构建产物 `internal/webui/dist`，SPA shell 已开放匿名只读）。如需更新截图，按下述步骤重建后截屏替换 `docs/img/`。
+
+- `docs/img/live-universal-custom.png` — Live 实时台：顶部 KPI + 威胁等级 + 1 张 `通用 · custom` 卡片（含 `BrandChip` 模型 logo + `observed` 徽章）与 1 张 `claude-code` 对比卡片。
+- `docs/img/fleet-universal-custom.png` — 舰队页：表格中 `agent_type=custom` 行与品牌 logo 模型列并排。
+- `docs/img/drawer-universal-control.png` — 抽屉：`能力管控 →` 嵌套二级抽屉（allow/confirm/block 分段控件）。
+
+> 当前仓库未入库实机截图时，以上占位以文字描述为准；CI 环境执行 `npm --prefix web run build && cp -r web/dist/* internal/webui/dist/` 后以真实控制台截图替换即可。下次截图更新提交信息统一为 `docs: universal onboarding screenshots`。
+
+### 9.4 本地复现（截图前）
+
+```bash
+# 1. 构建前端并同步 embed
+npm --prefix web run build
+rm -rf internal/webui/dist && mkdir -p internal/webui/dist && cp -r web/dist/* internal/webui/dist/
+
+# 2. 启动网关（或仅校验构建）
+go vet ./... && go build ./...
+
+# 3. 注册通用 agent（任意 harness 以 custom 接入，发送一条带 model 的请求后）
+curl -s http://127.0.0.1:8090/api/agents | jq '.[].agent_type'
+# => "custom"
+
+# 4. 打开控制台 http://127.0.0.1:8090/ 截图 Live / Fleet
+```
