@@ -268,7 +268,7 @@ func (r *Registry) Upsert(in Record) error {
 	in.LastHeartbeat = now
 	// Status is computed via computeStatus (active/idle/offline), not stored.
 	// Keep stored Status as last computed for persistence, but List/Get recompute.
-	in.Status = computeStatus(in, now)
+	in.Status = r.computeStatus(in, now)
 	r.records[in.AgentID] = in
 	return r.saveLocked()
 }
@@ -438,12 +438,13 @@ func (r *Registry) ListActive() []Record {
 func (r *Registry) list(activeOnly bool) []Record {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	now := time.Now()
 	out := make([]Record, 0, len(r.records))
 	for _, v := range r.records {
 		if strings.TrimSpace(v.AgentID) == "" {
 			continue
 		}
-		v.Status = computeStatus(v, time.Now())
+		v.Status = r.computeStatus(v, now)
 		if activeOnly && v.Status == "offline" {
 			continue
 		}
@@ -458,7 +459,7 @@ func (r *Registry) Get(agentID string) (Record, bool) {
 	defer r.mu.RUnlock()
 	v, ok := r.records[agentID]
 	if ok {
-		v.Status = computeStatus(v, time.Now())
+		v.Status = r.computeStatus(v, time.Now())
 	}
 	return v, ok
 }
@@ -471,15 +472,54 @@ func isActiveRecord(v Record) bool {
 	return computeStatus(v, time.Now()) != "offline"
 }
 
+// hasRecentEvent checks whether the events table contains an event for
+// agentID within the activeWindow (5m) relative to now.
+func hasRecentEvent(db *sql.DB, agentID string, now time.Time) bool {
+	if db == nil || strings.TrimSpace(agentID) == "" {
+		return false
+	}
+	threshold := now.Add(-activeWindow).UnixMilli()
+	var exists int
+	err := db.QueryRow(`SELECT 1 FROM events WHERE agent_id=? AND ts >= ? LIMIT 1`, agentID, threshold).Scan(&exists)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false
+		}
+		return false
+	}
+	return true
+}
+
 // computeStatus implements the three-state model from DESIGN-V1 §2.8:
-//   active  – real harness activity within 5m
+//   active  – real harness activity within 5m (events table within 5m takes precedence)
 //   idle    – no activity but probe heartbeat within 2m (process alive, harness idle)
 //   offline – neither
+func (r *Registry) computeStatus(v Record, now time.Time) string {
+	if r != nil && r.db != nil {
+		if hasRecentEvent(r.db, v.AgentID, now) {
+			return "active"
+		}
+	}
+	if !v.LastActivity.IsZero() && now.Sub(v.LastActivity.UTC()) <= activeWindow {
+		return "active"
+	}
+	if isActiveAt(v.LastHeartbeat, now) {
+		return "idle"
+	}
+	return "offline"
+}
+
+// isActiveAt is the testable variant of isActive (uses supplied now instead of time.Now).
+func isActiveAt(lastHeartbeat time.Time, now time.Time) bool {
+	return !lastHeartbeat.IsZero() && now.Sub(lastHeartbeat.UTC()) <= heartbeatWindow
+}
+
+// computeStatusFree is a pure fallback without DB, used by tests via registry method.
 func computeStatus(v Record, now time.Time) string {
 	if !v.LastActivity.IsZero() && now.Sub(v.LastActivity.UTC()) <= activeWindow {
 		return "active"
 	}
-	if !v.LastHeartbeat.IsZero() && now.Sub(v.LastHeartbeat.UTC()) <= heartbeatWindow {
+	if isActiveAt(v.LastHeartbeat, now) {
 		return "idle"
 	}
 	return "offline"
