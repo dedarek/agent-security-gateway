@@ -254,7 +254,7 @@ func TestMountMCP(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	t.Setenv("USERPROFILE", tmp)
-	// also set homedir via override: mountMCP uses os.UserHomeDir which respects HOME
+	// mountMCP uses os.UserHomeDir which respects HOME
 	cfg := &ProbeConfig{Listen: "127.0.0.1:8181"}
 	entries := []registryEntry{
 		{Name: "tool-a", Command: []string{"echo", "hello"}},
@@ -271,15 +271,14 @@ func TestMountMCP(t *testing.T) {
 	if err := mountMCP(cfg, entries); err != nil {
 		t.Fatalf("mountMCP: %v", err)
 	}
-	// Check files created
-	for _, p := range []string{filepath.Join(tmp, ".claude", "mcp.json"), filepath.Join(tmp, ".cursor", "mcp.json")} {
-		b, err := os.ReadFile(p)
-		if err != nil {
-			t.Fatalf("read %s: %v", p, err)
-		}
-		if !strings.Contains(string(b), "asg-") {
-			t.Fatalf("no asg entry in %q", string(b))
-		}
+	// Generic universal path (harness-agnostic) — per-harness checks removed
+	p := filepath.Join(tmp, ".config", "asg", "mcp.json")
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("read %s: %v", p, err)
+	}
+	if !strings.Contains(string(b), "asg-") {
+		t.Fatalf("no asg entry in %q", string(b))
 	}
 }
 

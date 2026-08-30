@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -90,57 +89,48 @@ func ioReadAll(f *os.File) ([]byte, error) {
 	}
 }
 
-// initClient rewrites an agent's config to route through the probe.
+// initClient writes the harness-agnostic universal MCP config.
+// Per-harness branches (claude-code / codex / cursor) are deprecated:
+// any --app value is treated as universal and the config is written to
+// ~/.config/asg/mcp.json (generic, not per-harness).
 func initClient(app string) error {
 	cfg, err := loadProbeConfig("connect.yaml")
 	if err != nil {
-		return fmt.Errorf("load connect.yaml first: %w", err)
+		// fallback to universal path for fresh installs that only have universal.json
+		if cfg2, err2 := loadProbeConfig(DefaultUniversalPath()); err2 == nil {
+			cfg = cfg2
+		} else {
+			return fmt.Errorf("load connect.yaml first: %w", err)
+		}
 	}
 	home, _ := os.UserHomeDir()
-	switch app {
-	case "claude-code":
-		// Claude Code reads managed settings; we write the user settings file
-		// adding env so every launch routes via the probe.
-		dir := filepath.Join(home, ".claude")
-		_ = os.MkdirAll(dir, 0o755)
-		settings := map[string]any{
-			"env": map[string]string{
-				"ANTHROPIC_BASE_URL":   "http://" + cfg.Listen,
-				"ANTHROPIC_AUTH_TOKEN": firstKey(cfg),
-			},
-		}
-		b, _ := json.MarshalIndent(settings, "", "  ")
-		p := filepath.Join(dir, "settings.json")
-		if err := mergeJSONFile(p, b); err != nil {
-			return err
-		}
-		fmt.Println("claude-code configured:", p, "-> probe", cfg.Listen)
-
-	case "codex":
-		dir := filepath.Join(home, ".codex")
-		_ = os.MkdirAll(dir, 0o755)
-		toml := fmt.Sprintf(`model_provider = "asg"
-model = %q
-
-[model_providers.asg]
-name = "ASG Probe"
-base_url = "http://%s/v1"
-wire_api = "chat"
-`, firstDefaultModel(cfg), cfg.Listen)
-		p := filepath.Join(dir, "config.toml")
-		if err := appendIfAbsent(p, "\n# --- added by asg-connect ---\n"+toml); err != nil {
-			return err
-		}
-		_ = writeAuthFile(filepath.Join(dir, "auth.json"), firstKey(cfg))
-		fmt.Println("codex configured:", p, "-> probe", cfg.Listen)
-
-	case "cursor":
-		fmt.Println("cursor: edit ~/.cursor/mcp.json — set mcp server url to http://" + cfg.Listen + "/mcp")
-
-	default:
-		return fmt.Errorf("unknown app %q", app)
+	if app != "" && app != "universal" && app != "asg" {
+		fmt.Fprintf(os.Stderr, "warning: --app %q is deprecated; universal onboarding writes only to ~/.config/asg/mcp.json; treating as universal\n", app)
 	}
-	_ = exec.Command // keep import
+	dir := filepath.Join(home, ".config", "asg")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	path := filepath.Join(dir, "mcp.json")
+	doc := map[string]any{"mcpServers": map[string]any{}}
+	if b, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(b, &doc)
+		_ = os.WriteFile(path+".bak", b, 0o644)
+	}
+	servers, _ := doc["mcpServers"].(map[string]any)
+	if servers == nil {
+		servers = map[string]any{}
+	}
+	servers["asg"] = map[string]any{
+		"url":  "http://" + cfg.Listen + "/mcp",
+		"type": "http",
+	}
+	doc["mcpServers"] = servers
+	b, _ := json.MarshalIndent(doc, "", "  ")
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		return err
+	}
+	fmt.Println("asg universal configured:", path, "-> probe", cfg.Listen)
 	return nil
 }
 

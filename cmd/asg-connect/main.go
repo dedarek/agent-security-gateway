@@ -46,7 +46,7 @@ func main() {
 		}
 	case "init":
 		fs := flag.NewFlagSet("init", flag.ExitOnError)
-		app := fs.String("app", "", "claude-code | codex | cursor")
+		app := fs.String("app", "universal", "universal (harness-agnostic, writes to ~/.config/asg/mcp.json; legacy claude-code|codex|cursor are deprecated)")
 		fs.Parse(os.Args[2:])
 		if err := initClient(*app); err != nil {
 			fail(err)
@@ -63,7 +63,7 @@ func usage() {
 Usage:
   asg-connect serve  [-config connect.yaml] [--dry-run]  run the local proxy + reporter
   asg-connect check  < hook-payload.json     sync verdict for an agent hook
-  asg-connect init    -app claude-code|codex  write agent config to route via probe
+  asg-connect init    [-app universal]  write generic ~/.config/asg/mcp.json to route via probe (harness-agnostic; per-harness apps deprecated)
 `)
 }
 

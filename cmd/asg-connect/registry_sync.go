@@ -66,17 +66,17 @@ func syncLoop(cfg *ProbeConfig, stop <-chan struct{}) {
 	}
 }
 
-// mountMCP writes the entries into every supported agent config file that
-// exists on this machine. Cross-platform safety:
-//   - Windows-only commands (D:/... exe) are skipped on non-Windows and
-//     vice versa, preventing broken entries from being mounted.
-//   - A .bak backup of the existing config is created before first write.
+// mountMCP writes the entries into the harness-agnostic generic config
+// ~/.config/asg/mcp.json. Per-harness paths (~/.claude/mcp.json,
+// ~/.cursor/mcp.json) are deprecated and no longer written. Cross-platform
+// safety: Windows-only commands (D:/... exe) are skipped on non-Windows and
+// vice versa, preventing broken entries from being mounted.
+// A .bak backup of the existing config is created before first write.
 func mountMCP(cfg *ProbeConfig, entries []registryEntry) error {
 	home, _ := os.UserHomeDir()
 	isWindows := runtime.GOOS == "windows"
 	targets := []string{
-		filepath.Join(home, ".claude", "mcp.json"),
-		filepath.Join(home, ".cursor", "mcp.json"),
+		filepath.Join(home, ".config", "asg", "mcp.json"),
 	}
 	for _, path := range targets {
 		if dir := filepath.Dir(path); dir != "" {
