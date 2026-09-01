@@ -26,11 +26,12 @@ func (p *llmProxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 	// capture already done by copyRequest; ensure provider will be set after route
 
 	var in struct {
-		Model        string           `json:"model"`
-		Stream       bool             `json:"stream"`
-		Input        json.RawMessage  `json:"input"`
-		Instructions string           `json:"instructions"`
-		Tools        []map[string]any `json:"tools"`
+		Model           string           `json:"model"`
+		Stream          bool             `json:"stream"`
+		Input           json.RawMessage  `json:"input"`
+		Instructions    string           `json:"instructions"`
+		Tools           []map[string]any `json:"tools"`
+		MaxOutputTokens int              `json:"max_output_tokens"`
 	}
 	if err := json.Unmarshal(body, &in); err != nil {
 		http.Error(w, "bad json: "+err.Error(), 400)
@@ -39,6 +40,13 @@ func (p *llmProxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 
 	// --- build chat/completions request ---
 	chat := map[string]any{"model": in.Model, "stream": false}
+	// Reasoning models (deepseek-r1 style) spend tokens on `reasoning` before
+	// the final answer. Reserve headroom so the answer is not truncated away.
+	if in.MaxOutputTokens > 0 {
+		chat["max_tokens"] = in.MaxOutputTokens
+	} else {
+		chat["max_tokens"] = 1024
+	}
 	msgs := []map[string]any{}
 	if len(in.Instructions) > 0 && string(in.Instructions) != "" {
 		msgs = append(msgs, map[string]any{"role": "system", "content": in.Instructions})
@@ -129,7 +137,71 @@ func (p *llmProxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":{"type":"quota_protection","message":"model not allowed"}}`, http.StatusForbidden)
 		return
 	}
-	upURL := strings.TrimSuffix(prov.BaseURL, "/")
+	// Transparent: infer upstream and auth from caller's credential + model
+	incomingAuth := r.Header.Get("Authorization")
+	if incomingAuth == "" {
+		incomingAuth = r.Header.Get("x-api-key")
+		if incomingAuth != "" && !strings.HasPrefix(incomingAuth, "Bearer ") {
+			incomingAuth = "Bearer " + incomingAuth
+		}
+	}
+	// Transparent passthrough is a LAST RESORT for OpenAI-native models only
+	// when no configured provider covers the request. If a provider exists
+	// (route succeeded), the provider is the explicit intent and wins — even
+	// when the caller (e.g. Codex) also carries its own credential. This keeps
+	// commandcode-hosted models like gpt-5.6-luna off api.openai.com.
+	if incomingAuth != "" && prov == nil && isOpenAIModel(in.Model) {
+		upURL := "https://api.openai.com/v1/responses"
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, upURL, bytes.NewReader(body))
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", incomingAuth)
+		if !strings.HasPrefix(incomingAuth, "Bearer ") {
+			req.Header.Set("Authorization", "Bearer "+strings.TrimPrefix(incomingAuth, "Bearer "))
+		}
+		// Forward OpenAI beta headers if present
+		for _, h := range []string{"OpenAI-Beta", "OpenAI-Organization", "OpenAI-Project"} {
+			if v := r.Header.Get(h); v != "" {
+				req.Header.Set(h, v)
+			}
+		}
+		client := &http.Client{Timeout: 5 * time.Minute}
+		resp, err := client.Do(req)
+		if err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
+		defer resp.Body.Close()
+		respBody, _ := io.ReadAll(resp.Body)
+		p.rep.ReportLLM("probe-"+prov.Name, in.Model, body, respBody, time.Since(start).Milliseconds())
+		for k, v := range resp.Header {
+			if k == "Content-Type" || k == "Content-Length" {
+				for _, vv := range v {
+					w.Header().Set(k, vv)
+				}
+			}
+		}
+		if ct := resp.Header.Get("Content-Type"); ct != "" {
+			w.Header().Set("Content-Type", ct)
+		}
+		w.WriteHeader(resp.StatusCode)
+		w.Write(respBody)
+		return
+	}
+	providerBase := prov.BaseURL
+	authToUse := prov.APIKey
+	// Provider wins when one was routed: the provider's configured key and
+	// base_url are authoritative. The caller's credential is ONLY used in the
+	// transparent passthrough branch above (prov == nil), where the client is
+	// talking directly to a provider it already has credentials for.
+	if prov != nil && prov.APIKey == "" {
+		// provider has no key configured; fall back to caller credential
+		authToUse = strings.TrimPrefix(incomingAuth, "Bearer ")
+	}
+	upURL := strings.TrimSuffix(providerBase, "/")
 	if !strings.HasSuffix(upURL, "/v1") {
 		upURL += "/v1"
 	}
@@ -145,8 +217,8 @@ func (p *llmProxy) handleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+prov.APIKey)
-	req.Header.Set("x-api-key", prov.APIKey)
+	req.Header.Set("Authorization", "Bearer "+authToUse)
+	req.Header.Set("x-api-key", authToUse)
 
 	client := &http.Client{Timeout: 5 * time.Minute}
 	resp, err := client.Do(req)
@@ -274,6 +346,15 @@ func flattenText(blocks []any) string {
 func mustJSON(v any) []byte {
 	b, _ := json.Marshal(v)
 	return b
+}
+
+func containsStr(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }
 
 func randHex(n int) string {

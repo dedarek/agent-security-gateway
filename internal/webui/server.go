@@ -4,6 +4,7 @@
 package webui
 
 import (
+	"database/sql"
 	"embed"
 	"encoding/json"
 	"io/fs"
@@ -30,16 +31,17 @@ var page []byte
 var webDist embed.FS
 
 type Server struct {
-	Store      *store.Store
-	Approvals  *approval.Manager
-	Hub        *policyhub.Hub
-	Auth       *uiAuth
-	Agents     *agentregistry.Registry
-	Activity   *activity.Store
-	Engine     *engine.Registry
-	mu         sync.RWMutex
-	suggs      map[string]*intel.Suggestion
-	ingestAuth func(header string) bool // nil = open (dev)
+	Store       *store.Store
+	Approvals   *approval.Manager
+	Hub         *policyhub.Hub
+	Auth        *uiAuth
+	Agents      *agentregistry.Registry
+	Activity    *activity.Store
+	InventoryDB *sql.DB
+	Engine      *engine.Registry
+	mu          sync.RWMutex
+	suggs       map[string]*intel.Suggestion
+	ingestAuth  func(header string) bool // nil = open (dev)
 	// Agent onboarding/telemetry can run without a tenant key. This is
 	// deliberately separate from operator-console and central-MCP auth.
 	agentIngressOpen  bool
@@ -70,6 +72,10 @@ func New(st *store.Store, am *approval.Manager, hub *policyhub.Hub) *Server {
 
 // SetIngestAuth enforces tenant-key auth on POST /api/ingest.
 func (s *Server) SetAgentRegistry(r *agentregistry.Registry) { s.Agents = r }
+
+// SetInventoryDB wires the shared SQLite inventory catalog. A nil database
+// leaves inventory endpoints unavailable without affecting agent telemetry.
+func (s *Server) SetInventoryDB(database *sql.DB) { s.InventoryDB = database }
 
 func (s *Server) SetActivityStore(a *activity.Store) { s.Activity = a }
 
@@ -106,6 +112,24 @@ func (s *Server) Register(mux *http.ServeMux) {
 		w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		_, _ = w.Write(b)
+	})
+	mux.HandleFunc("/asg-connect", func(w http.ResponseWriter, r *http.Request) {
+		serveBin(w, r, "asg-connect")
+	})
+	mux.HandleFunc("/asg-connect.gz", func(w http.ResponseWriter, r *http.Request) {
+		serveBin(w, r, "asg-connect.gz")
+	})
+	mux.HandleFunc("/asg-connect-darwin-arm64", func(w http.ResponseWriter, r *http.Request) {
+		serveBin(w, r, "asg-connect-darwin-arm64")
+	})
+	mux.HandleFunc("/asg-connect-darwin-arm64.gz", func(w http.ResponseWriter, r *http.Request) {
+		serveBin(w, r, "asg-connect-darwin-arm64.gz")
+	})
+	mux.HandleFunc("/asg-connect-darwin-amd64", func(w http.ResponseWriter, r *http.Request) {
+		serveBin(w, r, "asg-connect-darwin-amd64")
+	})
+	mux.HandleFunc("/asg-connect-darwin-amd64.gz", func(w http.ResponseWriter, r *http.Request) {
+		serveBin(w, r, "asg-connect-darwin-amd64.gz")
 	})
 	// ingest auth: open in dev (nil), tenant-key enforced when SetIngestAuth is called
 	s.RegisterIngestWithAuth(mux, s.effectiveIngestAuth(s.ingestAuth))
@@ -178,6 +202,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/agents/action", s.Auth.middleware(s.apiAgentAction))
 	mux.HandleFunc("/api/agents/register", s.apiAgentRegister)
 	mux.HandleFunc("/api/agents/heartbeat", s.apiAgentHeartbeat)
+	// Probe observations are keyless in single-tenant onboarding; they are
+	// still untrusted and can only create pending inventory records.
+	mux.HandleFunc("/api/inventory/ingest", s.apiInventoryIngest)
+	mux.HandleFunc("/api/inventory", s.Auth.middleware(s.apiInventory))
 	mux.HandleFunc("/api/ui-login", s.uiLogin)
 }
 
@@ -304,3 +332,43 @@ func (s *Server) apiSuggestionDecide(w http.ResponseWriter, r *http.Request) {
 
 // sugKey namespaces the per-session cache index.
 func sugKey(session string) string { return "sess:" + session }
+
+func serveBin(w http.ResponseWriter, r *http.Request, name string) {
+	// Support gzipped variant for slow public tunnels (cpolar).
+	if strings.HasSuffix(name, ".gz") {
+		b, err := os.ReadFile(filepath.Join("bin", name))
+		if err != nil {
+			if ex, e2 := os.Executable(); e2 == nil {
+				b, err = os.ReadFile(filepath.Join(filepath.Dir(ex), "..", "bin", name))
+			}
+		}
+		if err != nil {
+			http.Error(w, "binary not found: "+name, 404)
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Set("Content-Disposition", "attachment; filename=\""+name+"\"")
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write(b)
+		return
+	}
+	b, err := os.ReadFile(filepath.Join("bin", name))
+	if err != nil {
+		if ex, e2 := os.Executable(); e2 == nil {
+			b, err = os.ReadFile(filepath.Join(filepath.Dir(ex), "..", "bin", name))
+		}
+	}
+	if err != nil {
+		// Try repo root bin
+		b, err = os.ReadFile(filepath.Join("..", "bin", name))
+	}
+	if err != nil {
+		http.Error(w, "binary not found: "+name, 404)
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+name+"\"")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(b)
+}

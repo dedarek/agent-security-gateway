@@ -46,6 +46,7 @@ func serve(cfgPath string) error {
 		return err
 	}
 	startAgentRegistration(*cfg)
+	startInventoryDiscovery(cfg)
 	rep := newReporter(cfg.HubURL, cfg.TenantKey, cfg.EventSpoolPath, cfg.TenantName, cfg.AgentID)
 	p := &llmProxy{cfg: cfg, rep: rep}
 
@@ -141,11 +142,29 @@ func (p *llmProxy) handleLLM(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	upURL := strings.TrimSuffix(prov.BaseURL, "/") + strings.TrimPrefix(r.URL.Path, "")
+	// Transparent pass-through: if caller supplied its own credential (e.g. Codex gpt login),
+	// preserve it and infer upstream from model prefix. This removes per-model provider config.
+	incomingAuth := r.Header.Get("Authorization")
+	if incomingAuth == "" {
+		incomingAuth = r.Header.Get("x-api-key")
+		if incomingAuth != "" && !strings.HasPrefix(incomingAuth, "Bearer ") {
+			incomingAuth = "Bearer " + incomingAuth
+		}
+	}
+	providerBase := prov.BaseURL
+	authToUse := prov.APIKey
+	if incomingAuth != "" {
+		authToUse = strings.TrimPrefix(incomingAuth, "Bearer ")
+		// gpt/o1/o3/o4 models → OpenAI directly
+		if isOpenAIModel(upstreamModel) {
+			providerBase = "https://api.openai.com/v1"
+		}
+	}
+	upURL := strings.TrimSuffix(providerBase, "/") + strings.TrimPrefix(r.URL.Path, "")
 	// Some clients post to /v1/chat/completions while provider base already
 	// includes /v1 — normalize by avoiding double /v1.
-	if strings.HasSuffix(prov.BaseURL, "/v1") && strings.HasPrefix(r.URL.Path, "/v1/") {
-		upURL = strings.TrimSuffix(prov.BaseURL, "/") + strings.TrimPrefix(r.URL.Path, "/v1")
+	if strings.HasSuffix(providerBase, "/v1") && strings.HasPrefix(r.URL.Path, "/v1/") {
+		upURL = strings.TrimSuffix(providerBase, "/") + strings.TrimPrefix(r.URL.Path, "/v1")
 	}
 
 	req, err := http.NewRequestWithContext(r.Context(), r.Method, upURL, strings.NewReader(string(body)))
@@ -154,8 +173,8 @@ func (p *llmProxy) handleLLM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+prov.APIKey)
-	req.Header.Set("x-api-key", prov.APIKey) // anthropic-style providers
+	req.Header.Set("Authorization", "Bearer "+authToUse)
+	req.Header.Set("x-api-key", authToUse) // anthropic-style providers
 	if strings.Contains(r.URL.Path, "/messages") {
 		// Anthropic wire format requires the version header.
 		v := r.Header.Get("anthropic-version")
@@ -299,6 +318,9 @@ func (p *llmProxy) route(body []byte) (*Provider, string, error) {
 	model := ""
 	_ = jsonUnmarshal(body, &req)
 	model = req.Model
+	if p.cfg.StrictModel != "" && model != "" && !strings.EqualFold(model, p.cfg.StrictModel) {
+		return nil, "", fmt.Errorf("model %q is not allowed; only %q is permitted", model, p.cfg.StrictModel)
+	}
 
 	for i := range p.cfg.Providers {
 		prov := &p.cfg.Providers[i]
@@ -331,9 +353,20 @@ func (p *llmProxy) route(body []byte) (*Provider, string, error) {
 				}
 			}
 		}
+		// Transparent fallback: no provider matched, but caller supplied its own
+		// credential (e.g. Codex gpt login). Allow pass-through; upstream will be
+		// inferred from model prefix in the handler.
+		if len(p.cfg.Providers) > 0 {
+			return &p.cfg.Providers[0], model, nil
+		}
 		return nil, "", fmt.Errorf("no provider can serve model %q", model)
 	}
 	return &Provider{Name: "none"}, model, fmt.Errorf("no providers configured")
+}
+
+func isOpenAIModel(m string) bool {
+	m = strings.ToLower(m)
+	return strings.HasPrefix(m, "gpt-") || strings.HasPrefix(m, "o1") || strings.HasPrefix(m, "o3") || strings.HasPrefix(m, "o4") || strings.HasPrefix(m, "gpt-5")
 }
 
 func jsonQuote(s string) string {

@@ -254,9 +254,21 @@ func convertAnthroMessages(system json.RawMessage, messages []anthroMsg) []map[s
 					name, _ := block["name"].(string)
 					input := block["input"]
 					tuID, _ := block["id"].(string)
+					// OpenAI requires tool_calls[].function.arguments to be a JSON
+					// *string* — the anthropic input object must be marshaled, not
+					// embedded as a nested object (upstream rejects the object form
+					// with "expected string, received object").
+					argsStr := ""
+					if input != nil {
+						if s, ok := input.(string); ok {
+							argsStr = s
+						} else if b, err := json.Marshal(input); err == nil {
+							argsStr = string(b)
+						}
+					}
 					toolCalls = append(toolCalls, map[string]any{
 						"id": tuID, "type": "function",
-						"function": map[string]any{"name": name, "arguments": input},
+						"function": map[string]any{"name": name, "arguments": argsStr},
 					})
 				}
 			}
@@ -265,7 +277,13 @@ func convertAnthroMessages(system json.RawMessage, messages []anthroMsg) []map[s
 		}
 
 		if role == "user" {
-			out = append(out, map[string]any{"role": "user", "content": contentText})
+			// Upstream (OpenAI-compatible) rejects user messages with empty
+			// content ("user message must have content"). Claude Code can emit
+			// an empty user turn after /clear or between tool calls; drop the
+			// message instead of forwarding garbage.
+			if strings.TrimSpace(contentText) != "" {
+				out = append(out, map[string]any{"role": "user", "content": contentText})
+			}
 		} else if role == "assistant" {
 			entry := map[string]any{"role": "assistant", "content": contentText}
 			if len(toolCalls) > 0 {

@@ -35,14 +35,18 @@ type ProbeConfig struct {
 	// Upstream LLM providers the user configured (Bifrost-style model freedom).
 	// Kept for compatibility with legacy connect.yaml; universal.json may omit.
 	Providers []Provider `yaml:"providers" json:"providers,omitempty"`
+	// StrictModel, when set, is the only model this probe may forward.
+	// It is intentionally opt-in so legacy multi-provider configs retain
+	// their existing routing behavior.
+	StrictModel string `yaml:"strict_model,omitempty" json:"strict_model,omitempty"`
 
 	// Central gateway coordinates.
-	HubURL     string `yaml:"hub_url" json:"hub_url"`       // e.g. http://gw.corp:8080
-	TenantKey  string `yaml:"tenant_key" json:"tenant_key"` // this machine's identity
-	TenantName string `yaml:"tenant_name" json:"tenant_name"`
-	AgentID    string `yaml:"agent_id" json:"agent_id"`
-	AgentType  string `yaml:"agent_type" json:"agent_type"`
-	AgentAlias string `yaml:"agent_alias" json:"agent_alias"`
+	HubURL      string   `yaml:"hub_url" json:"hub_url"`       // e.g. http://gw.corp:8080
+	TenantKey   string   `yaml:"tenant_key" json:"tenant_key"` // this machine's identity
+	TenantName  string   `yaml:"tenant_name" json:"tenant_name"`
+	AgentID     string   `yaml:"agent_id" json:"agent_id"`
+	AgentType   string   `yaml:"agent_type" json:"agent_type"`
+	AgentAlias  string   `yaml:"agent_alias" json:"agent_alias"`
 	DeclaredIPs []string `yaml:"declared_ips,omitempty" json:"declared_ips,omitempty"`
 
 	// UniversalPath is the filesystem path of the universal declaration
@@ -50,6 +54,10 @@ type ProbeConfig struct {
 	// loadProbeConfig fills it with the resolved path. Kept here so
 	// callers can distinguish universal vs legacy sources.
 	UniversalPath string `yaml:"universal_path" json:"universal_path"`
+
+	// Optional roots for generic MCP/Skill discovery. Empty uses bounded home
+	// and working-directory scans; roots are data sources, not harness branches.
+	DiscoveryRoots []string `yaml:"discovery_roots,omitempty" json:"discovery_roots,omitempty"`
 
 	// MCP shim: real upstream MCP servers, re-published locally.
 	MCPUpstreams []MCPUpstream `yaml:"mcp_upstreams" json:"mcp_upstreams,omitempty"`

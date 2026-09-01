@@ -215,6 +215,9 @@ func serveCmd(args []string) {
 	uiSrv := webui.New(evStore, approvals, hub)
 	uiSrv.SetAgentRegistry(agentReg)
 	if dbHandle != nil {
+		uiSrv.SetInventoryDB(dbHandle)
+	}
+	if dbHandle != nil {
 		uiSrv.SetActivityStore(activity.NewWithDB(dbHandle))
 	} else {
 		uiSrv.SetActivityStore(activity.New())

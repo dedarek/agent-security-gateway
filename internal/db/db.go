@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -76,6 +77,35 @@ CREATE TABLE IF NOT EXISTS model_history (
 );
 CREATE INDEX IF NOT EXISTS idx_model_history_agent ON model_history(agent_id, ts DESC);
 
+CREATE TABLE IF NOT EXISTS inventory_items (
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  stable_key         TEXT NOT NULL UNIQUE,
+  agent_id           TEXT NOT NULL DEFAULT '',
+  parent_id          TEXT NOT NULL DEFAULT '',
+  kind               TEXT NOT NULL,
+  name               TEXT NOT NULL,
+  source             TEXT NOT NULL DEFAULT '',
+  origin             TEXT NOT NULL DEFAULT '',
+  version            TEXT NOT NULL DEFAULT '',
+  manifest_hash      TEXT NOT NULL DEFAULT '',
+  schema_hash        TEXT NOT NULL DEFAULT '',
+  install_path       TEXT NOT NULL DEFAULT '',
+  status             TEXT NOT NULL DEFAULT 'discovered',
+  risk_level         TEXT NOT NULL DEFAULT '',
+  risk_labels_json   TEXT NOT NULL DEFAULT '[]',
+  risk_reasons_json  TEXT NOT NULL DEFAULT '[]',
+  declared_caps_json TEXT NOT NULL DEFAULT '[]',
+  observed_caps_json TEXT NOT NULL DEFAULT '[]',
+  ai_status          TEXT NOT NULL DEFAULT 'pending',
+  policy_json        TEXT NOT NULL DEFAULT '{}',
+  first_seen         INTEGER NOT NULL,
+  last_seen          INTEGER NOT NULL,
+  updated_at         INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_inventory_agent_seen ON inventory_items(agent_id, last_seen DESC);
+CREATE INDEX IF NOT EXISTS idx_inventory_kind ON inventory_items(kind);
+CREATE INDEX IF NOT EXISTS idx_inventory_status ON inventory_items(status);
+
 CREATE TABLE IF NOT EXISTS policies (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   agent_id    TEXT,
@@ -83,6 +113,7 @@ CREATE TABLE IF NOT EXISTS policies (
   rule_id     TEXT NOT NULL,
   action      TEXT NOT NULL,
   enabled     INTEGER NOT NULL DEFAULT 1,
+  selector_json TEXT NOT NULL DEFAULT '{}',
   updated_at  INTEGER NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_policies_scope ON policies(COALESCE(agent_id,''), rule_id);
@@ -117,7 +148,17 @@ func Open(dsn string) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	// M2 databases predate structured policy selectors. Keep the old
+	// agent_id+rule_id API and add the selector column in place.
+	if _, err := db.Exec(`ALTER TABLE policies ADD COLUMN selector_json TEXT NOT NULL DEFAULT '{}'`); err != nil && !isDuplicateColumn(err) {
+		_ = db.Close()
+		return nil, fmt.Errorf("migrate policy selectors: %w", err)
+	}
 	return db, nil
+}
+
+func isDuplicateColumn(err error) bool {
+	return err != nil && (strings.Contains(strings.ToLower(err.Error()), "duplicate column") || strings.Contains(strings.ToLower(err.Error()), "already exists"))
 }
 
 func hasQuery(dsn string) bool {

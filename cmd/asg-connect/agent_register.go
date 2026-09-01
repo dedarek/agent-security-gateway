@@ -78,12 +78,16 @@ func collectAgentRegistration(cfg ProbeConfig) agentRegistration {
 	machineID := hex.EncodeToString(h[:])[:16]
 	agentID := cfg.AgentID
 	if agentID == "" {
-		agentID = cfg.TenantName + "-" + name
+		if strings.TrimSpace(cfg.TenantName) != "" {
+			agentID = cfg.TenantName + "-" + name
+		} else {
+			agentID = name
+		}
 	}
 	probeID := "probe-" + machineID
 	agentType := cfg.AgentType
 	if agentType == "" {
-		agentType = "unknown"
+		agentType = "custom"
 	}
 	model, provider := "", ""
 	// Prefer observed traffic over static config (sidecar sniffing).
