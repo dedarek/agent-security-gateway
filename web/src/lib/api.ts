@@ -62,4 +62,6 @@ export const api = {
   trajectory: (session: string) => get<any>(`/api/trajectory?session=${encodeURIComponent(session)}`),
   kgPath: (source: string, target: string) => get<any>(`/api/kg/graph/path?source=${encodeURIComponent(source)}&target=${encodeURIComponent(target)}`),
   dataAccess: (agentId: string) => get<any>(`/api/data-access?agent_id=${encodeURIComponent(agentId)}`),
+  dataAccessByTrace: (traceId: string) => get<any>(`/api/data-access?trace_id=${encodeURIComponent(traceId)}`),
+  dataAccessRecent: () => get<any>('/api/data-access'),
 }

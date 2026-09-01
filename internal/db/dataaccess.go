@@ -84,6 +84,16 @@ func QueryDataAccessByAgent(db *sql.DB, agentID string) ([]api.DataAccess, error
 	return scanDataAccessRows(rows)
 }
 
+// RecentDataAccess returns the n most recent data-flow hops across all agents.
+func RecentDataAccess(db *sql.DB, n int) ([]api.DataAccess, error) {
+	rows, err := db.Query(`SELECT trace_id, span_id, parent_span, agent_id, tool_id, operation, source, destination, data_class, taint_tags, policy_id, decision, trust_zone_src, trust_zone_dst, ts FROM data_access ORDER BY ts DESC, id DESC LIMIT ?`, n)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanDataAccessRows(rows)
+}
+
 func scanDataAccessRows(rows *sql.Rows) ([]api.DataAccess, error) {
 	var out []api.DataAccess
 	for rows.Next() {

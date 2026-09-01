@@ -25,8 +25,8 @@ func (s *Server) apiDataAccess(w http.ResponseWriter, r *http.Request) {
 	} else if agentID := r.URL.Query().Get("agent_id"); agentID != "" {
 		hops, err = db.QueryDataAccessByAgent(s.InventoryDB, agentID)
 	} else {
-		http.Error(w, "trace_id or agent_id required", http.StatusBadRequest)
-		return
+		// no filter -> recent hops across all agents (Demo/lineage view)
+		hops, err = db.RecentDataAccess(s.InventoryDB, 100)
 	}
 	if err != nil {
 		http.Error(w, "data access read failed", http.StatusInternalServerError)
