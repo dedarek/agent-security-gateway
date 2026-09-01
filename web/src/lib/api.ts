@@ -61,4 +61,5 @@ export const api = {
   suggestions: () => get<any[]>('/api/suggestions'),
   trajectory: (session: string) => get<any>(`/api/trajectory?session=${encodeURIComponent(session)}`),
   kgPath: (source: string, target: string) => get<any>(`/api/kg/graph/path?source=${encodeURIComponent(source)}&target=${encodeURIComponent(target)}`),
+  dataAccess: (agentId: string) => get<any>(`/api/data-access?agent_id=${encodeURIComponent(agentId)}`),
 }
