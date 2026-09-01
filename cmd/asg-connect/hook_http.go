@@ -66,6 +66,14 @@ func hookHTTPHandler(cfg *ProbeConfig, rep *reporter) http.HandlerFunc {
 			json.NewEncoder(w).Encode(map[string]any{"decision": "block", "reason": hubReason})
 			return
 		}
+		if err == nil && hubVerdict == "ASK" {
+			// Human approval required — Claude Code shows a permission prompt.
+			rep.ReportTool(sessionID, "hook."+payload.ToolName, payload.ToolInput, "CONFIRM", hubReason)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			json.NewEncoder(w).Encode(map[string]any{"decision": "ask", "reason": hubReason})
+			return
+		}
 
 		rep.ReportTool(sessionID, "hook."+payload.ToolName, payload.ToolInput, "ALLOW", "")
 		w.Header().Set("Content-Type", "application/json")

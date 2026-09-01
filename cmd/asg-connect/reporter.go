@@ -255,6 +255,9 @@ func (r *reporter) hubCheck(ctx context.Context, sessionID, agentID, toolID stri
 	if resp.StatusCode == http.StatusForbidden || out.Decision == "block" {
 		return "BLOCK", out.Reason, nil
 	}
+	if resp.StatusCode == http.StatusAccepted || out.Decision == "ask" || out.Decision == "confirm" {
+		return "ASK", out.Reason, nil
+	}
 	return "ALLOW", out.Reason, nil
 }
 

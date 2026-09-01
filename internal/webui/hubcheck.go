@@ -112,6 +112,18 @@ func (s *Server) apiHubCheck(w http.ResponseWriter, r *http.Request) {
 			writeBlock(w, reason)
 			return
 		}
+		// CONFIRM: queue for human approval (async — no blocking). The probe
+		// returns an "ask" response (Claude Code shows a permission prompt);
+		// the operator decides in the console → tool continues or is denied.
+		if dec.Final == api.VerdictConfirm && s.Approvals != nil {
+			reason := "approval required: " + firstReason(&dec)
+			s.Approvals.Enqueue(call, dec)
+			s.reportHookTool(payload, "CONFIRM", reason)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			json.NewEncoder(w).Encode(map[string]any{"decision": "ask", "reason": reason})
+			return
+		}
 		// Observe the call so data-flow state (taint) accumulates for the
 		// session — the cross-tool propagation primitive. EvaluatePre above
 		// runs with this call's OWN provenance; ObserveHook records it.
@@ -183,6 +195,12 @@ func verdictToEnum(v string) api.Verdict {
 	default:
 		return api.VerdictAllow
 	}
+}
+
+func writeAllow(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]any{"decision": "allow"})
 }
 
 func writeBlock(w http.ResponseWriter, reason string) {

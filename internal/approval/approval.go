@@ -36,6 +36,12 @@ func NewManager(timeout time.Duration) *Manager {
 	return &Manager{pending: map[string]*Request{}, timeout: timeout}
 }
 
+// Enqueue adds a request without blocking (async approval flow). The caller
+// returns an "ask" to the agent; the operator decides later in the console.
+func (m *Manager) Enqueue(c *api.ToolCall, d api.Decision) *Request {
+	return m.enqueue(c, d)
+}
+
 // Confirm implements proxy.Approver: enqueue, block for a human decision.
 func (m *Manager) Confirm(ctx context.Context, c *api.ToolCall, d api.Decision) (bool, error) {
 	req := m.enqueue(c, d)
