@@ -216,6 +216,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// still untrusted and can only create pending inventory records.
 	mux.HandleFunc("/api/inventory/ingest", s.apiInventoryIngest)
 	mux.HandleFunc("/api/inventory", s.Auth.middleware(s.apiInventory))
+	mux.HandleFunc("/api/data-access", s.Auth.middleware(s.apiDataAccess))
 	mux.HandleFunc("/api/ui-login", s.uiLogin)
 }
 
