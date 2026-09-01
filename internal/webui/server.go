@@ -16,12 +16,12 @@ import (
 
 	"github.com/dedarek/agent-security-gateway/api"
 	"github.com/dedarek/agent-security-gateway/internal/activity"
-	"github.com/dedarek/agent-security-gateway/internal/session"
 	"github.com/dedarek/agent-security-gateway/internal/agentregistry"
 	"github.com/dedarek/agent-security-gateway/internal/approval"
 	"github.com/dedarek/agent-security-gateway/internal/engine"
 	"github.com/dedarek/agent-security-gateway/internal/intel"
 	"github.com/dedarek/agent-security-gateway/internal/policyhub"
+	"github.com/dedarek/agent-security-gateway/internal/session"
 	"github.com/dedarek/agent-security-gateway/internal/store"
 )
 
@@ -225,6 +225,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/inventory/ingest", s.apiInventoryIngest)
 	mux.HandleFunc("/api/inventory", s.Auth.middleware(s.apiInventory))
 	mux.HandleFunc("/api/data-access", s.Auth.middleware(s.apiDataAccess))
+	mux.HandleFunc("/api/coverage/report", s.apiCoverageReport)
+	mux.HandleFunc("/api/coverage", s.Auth.middleware(s.apiCoverage))
 	mux.HandleFunc("/api/hub-check", s.apiHubCheck)
 	mux.HandleFunc("/api/ui-login", s.uiLogin)
 }

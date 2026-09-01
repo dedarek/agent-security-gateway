@@ -82,6 +82,10 @@ func serve(cfgPath string) error {
 	stop := make(chan struct{})
 	go syncLoop(cfg, stop)
 
+	// Enforcement coverage: 30s self-check posted to the hub. Detects hook
+	// removal / config tampering / hub loss (SECURITY DEGRADED).
+	go coverageLoop(cfg, rep, stop)
+
 	log.Printf("[asg-connect] probe listening on %s (hub=%s tenant=%s)",
 		cfg.Listen, cfg.HubURL, cfg.TenantName)
 	srv := &http.Server{Addr: cfg.Listen, Handler: mux}
