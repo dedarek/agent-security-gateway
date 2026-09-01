@@ -117,6 +117,29 @@ CREATE TABLE IF NOT EXISTS policies (
   updated_at  INTEGER NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_policies_scope ON policies(COALESCE(agent_id,''), rule_id);
+
+CREATE TABLE IF NOT EXISTS data_access (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  trace_id      TEXT NOT NULL,
+  span_id       TEXT NOT NULL,
+  parent_span   TEXT NOT NULL DEFAULT '',
+  agent_id      TEXT NOT NULL DEFAULT '',
+  tool_id       TEXT NOT NULL DEFAULT '',
+  operation     TEXT NOT NULL,
+  source        TEXT NOT NULL DEFAULT '',
+  destination   TEXT NOT NULL DEFAULT '',
+  data_class    TEXT NOT NULL DEFAULT '',
+  taint_tags    TEXT NOT NULL DEFAULT '[]',
+  policy_id     TEXT NOT NULL DEFAULT '',
+  decision      TEXT NOT NULL DEFAULT '',
+  trust_zone_src TEXT NOT NULL DEFAULT '',
+  trust_zone_dst TEXT NOT NULL DEFAULT '',
+  ts            INTEGER NOT NULL,
+  UNIQUE(trace_id, span_id)
+);
+CREATE INDEX IF NOT EXISTS idx_data_access_trace ON data_access(trace_id, ts);
+CREATE INDEX IF NOT EXISTS idx_data_access_agent ON data_access(agent_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_data_access_sink ON data_access(destination, ts DESC);
 `
 
 // Open opens (creating parent dirs if needed) a SQLite DB at dsn and

@@ -196,6 +196,7 @@ func serveCmd(args []string) {
 		Audit:      auditSink,
 		Sessions:   store_,
 		Observers:  []proxy.ResultObserver{taint},
+		DataAccess: engine.NewDataAccessRecorder(dbHandle, taint),
 		PolicyHash: policyHash(cfg.CedarPolicyPath, cfg.RulesPath),
 		Monitor:    mon,
 		Judge:      judgeInst,
@@ -223,6 +224,7 @@ func serveCmd(args []string) {
 		uiSrv.SetActivityStore(activity.New())
 	}
 	uiSrv.SetEngine(reg)
+	uiSrv.SetDataAccess(engine.NewDataAccessRecorder(dbHandle, taint))
 	if dbHandle != nil {
 		webui.SetPoliciesDB(dbHandle)
 	}

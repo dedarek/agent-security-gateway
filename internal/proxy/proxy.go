@@ -38,6 +38,13 @@ type ResultObserver interface {
 	ObserveResult(sessionID, toolID string, output []byte)
 }
 
+// DataAccessRecorder is notified of every decided tool call so the data-flow
+// hop (source -> operation -> destination + taint + decision) lands in the
+// lineage store. Implemented by engine.DataAccessRecorder.
+type DataAccessRecorder interface {
+	ObserveProxy(c *api.ToolCall, verdict string)
+}
+
 // Gateway wires ingress -> decision engine -> approver -> forwarder -> audit.
 type Gateway struct {
 	Registry   *engine.Registry
@@ -48,6 +55,8 @@ type Gateway struct {
 	Observers  []ResultObserver
 	PolicyHash string
 	Monitor    *monitor.Monitor
+	// DataAccess records data-flow hops for decided calls (nil disables).
+	DataAccess DataAccessRecorder
 	Judge      *judge.Judge
 	KGBuilder  *kg.Builder
 	KGBridge   *kgbridge.Bridge
@@ -120,6 +129,9 @@ func (g *Gateway) Handle(ctx context.Context, c *api.ToolCall) (*api.ToolResult,
 
 	// Effective decision = most severe across pre and post.
 	eff := moreSevere(pre, post)
+	if g.DataAccess != nil {
+		g.DataAccess.ObserveProxy(c, eff.Final.String())
+	}
 	if eff.Final == api.VerdictBlock {
 		g.record(c, res, eff)
 		return nil, eff, nil

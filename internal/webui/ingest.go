@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/dedarek/agent-security-gateway/api"
+	"github.com/dedarek/agent-security-gateway/internal/activity"
 )
 
 func (s *Server) RegisterIngest(mux *http.ServeMux) {
@@ -50,6 +51,18 @@ func (s *Server) apiIngest(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		ev := s.normalizeIngressEvent(raw)
+		// Data lineage: every ingested tool call becomes a DataAccess hop so
+		// hook/rampart telemetry also lands in the lineage graph.
+		if s.DataAccess != nil && !strings.HasPrefix(ev.Call.ToolID, "llm.") {
+			payload, _ := json.Marshal(raw)
+			s.DataAccess.ObserveHook(ev.SessionID, ev.TraceID, ev.Call.ToolID, payload, ev.Decision.Final.String())
+		}
+		// Auto-register agents seen in telemetry: an event with a real agent_id
+		// implies the agent exists on some machine. This makes bridge/rampart
+		// events surface as console agent cards without a separate register call.
+		if s.Agents != nil && ev.Call.Principal.AgentID != "" {
+			_ = s.Agents.EnsureFromEvent(ev.Call.Principal.AgentID, ev.Call.ToolID, ev.Timestamp)
+		}
 		if s.Agents != nil && strings.HasPrefix(ev.Call.ToolID, "llm.") && ev.Call.Principal.AgentID != "" {
 			_ = s.Agents.ObserveModel(ev.Call.Principal.AgentID, strings.TrimPrefix(ev.Call.ToolID, "llm."), "", ev.Timestamp)
 		}
@@ -57,6 +70,22 @@ func (s *Server) apiIngest(w http.ResponseWriter, r *http.Request) {
 			_ = s.Agents.ObserveSession(ev.Call.Principal.AgentID, ev.SessionID, ev.Timestamp)
 		}
 		s.Store.Write(ev)
+		// Bridge/Rampart telemetry enters through /api/ingest rather than the
+		// hook-facing /api/activity endpoint. Mirror it into the same activity
+		// store and SSE fan-out so remote agents are live in the console too.
+		if s.Activity != nil && ev.Call.Principal.AgentID != "" {
+			step := activity.Step{
+				At:        ev.Timestamp,
+				AgentID:   ev.Call.Principal.AgentID,
+				SessionID: ev.SessionID,
+				Kind:      "tool_use",
+				ToolName:  ev.Call.ToolID,
+				Summary:   "ingest: " + ev.Call.ToolID,
+				Verdict:   ev.Decision.Final.String(),
+			}
+			s.Activity.Add(step)
+			s.NotifyActivity(step)
+		}
 		n++
 	}
 	writeJSON(w, map[string]int{"accepted": n})

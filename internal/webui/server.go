@@ -54,6 +54,13 @@ type Server struct {
 	// graph grows in real time (previously only the MCP proxy path ingested;
 	// hook-path events never reached the graph until a 30s self-heal replay).
 	kgLive func(ev api.Event)
+	// DataAccess records data-flow hops for ingested tool calls (hook path).
+	DataAccess DataAccessObserver
+}
+
+// DataAccessObserver is implemented by engine.DataAccessRecorder.
+type DataAccessObserver interface {
+	ObserveHook(sessionID, traceID, toolID string, payload []byte, verdict string)
 }
 
 // SetKGLive wires the live KG ingest callback (builder.Ingest + bridge push).
@@ -80,6 +87,9 @@ func (s *Server) SetInventoryDB(database *sql.DB) { s.InventoryDB = database }
 func (s *Server) SetActivityStore(a *activity.Store) { s.Activity = a }
 
 func (s *Server) SetEngine(e *engine.Registry) { s.Engine = e }
+
+// SetDataAccess wires the data-lineage recorder (hook/ingest path).
+func (s *Server) SetDataAccess(r DataAccessObserver) { s.DataAccess = r }
 
 func (s *Server) SetIngestAuth(f func(header string) bool) { s.ingestAuth = f }
 

@@ -67,6 +67,36 @@ func (v Verdict) String() string {
 	}
 }
 
+// DataAccess is a first-class event in the agent trace graph: it records that
+// an agent tool touched data — reading from a source, transforming it, or
+// transmitting it to a destination — together with the data's classification
+// and taint tags. This is the primitive that turns trace + taint into
+// context-aware data-lineage DLP.
+type DataAccess struct {
+	TraceID      string    `json:"trace_id"`
+	SpanID       string    `json:"span_id"`
+	ParentSpan   string    `json:"parent_span,omitempty"`
+	AgentID      string    `json:"agent_id"`
+	ToolID       string    `json:"tool_id"`
+	Operation    string    `json:"operation"` // read | write | transform | transmit
+	Source       string    `json:"source,omitempty"`
+	Destination  string    `json:"destination,omitempty"`
+	DataClass    string    `json:"data_class,omitempty"`
+	TaintTags    []string  `json:"taint_tags,omitempty"`
+	PolicyID     string    `json:"policy_id,omitempty"`
+	Decision     string    `json:"decision"` // ALLOW | CONFIRM | BLOCK | REDACT
+	TrustZoneSrc string    `json:"trust_zone_src,omitempty"`
+	TrustZoneDst string    `json:"trust_zone_dst,omitempty"`
+	At           time.Time `json:"at"`
+}
+
+// DataAccessSink reports where a tool sends data (for trust-zone checks).
+type DataAccessSink struct {
+	ToolID      string `json:"tool_id"`
+	Destination string `json:"destination"`
+	Operation   string `json:"operation"`
+}
+
 // MarshalJSON converts Verdict to string in JSON output.
 func (v Verdict) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.String())
@@ -192,7 +222,7 @@ type Decision struct {
 // Event is the record persisted and streamed to the SOC analysis plane.
 type Event struct {
 	SessionID string `json:"session_id,omitempty"`
-	TraceID   string `json:"trace_id,omitempty"` // groups one task's LLM+tool+shell events
+	TraceID   string `json:"trace_id,omitempty"`  // groups one task's LLM+tool+shell events
 	ParentID  string `json:"parent_id,omitempty"` // causal parent (e.g. the LLM call that triggered this tool)
 	Call      ToolCall
 	Result    *ToolResult
