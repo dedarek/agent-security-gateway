@@ -46,9 +46,12 @@ def _init_semantica(semantica_path):
     from semantica.embeddings import TextEmbedder
     from semantica.llms import OpenAI
     EMBEDDER = TextEmbedder(method="fastembed")
-    probe = os.environ.get("ASG_PROBE_URL", "http://127.0.0.1:8181/v1")
-    key = os.environ.get("ASG_PROBE_KEY", "dummy")
-    LLM = OpenAI(model="ox-alpha-free", api_key=key, base_url=probe)
+    probe = os.environ.get("ASG_PROBE_URL", "https://opencode.ai/zen/go/v1")
+    key = os.environ.get("ASG_PROBE_KEY", os.environ.get("OPENCODE_GO_API_KEY", "dummy"))
+    # The probe may strict-restrict to a single model (e.g. hy3); prefer the
+    # env override, else fall back to a permissive alias the probe accepts.
+    llm_model = os.environ.get("ASG_PROBE_MODEL", "hy3")
+    LLM = OpenAI(model=llm_model, api_key=key, base_url=probe)
 
     # Real Semantica graph — lineage/provenance core
     try:
