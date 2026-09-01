@@ -64,4 +64,7 @@ export const api = {
   dataAccess: (agentId: string) => get<any>(`/api/data-access?agent_id=${encodeURIComponent(agentId)}`),
   dataAccessByTrace: (traceId: string) => get<any>(`/api/data-access?trace_id=${encodeURIComponent(traceId)}`),
   dataAccessRecent: () => get<any>('/api/data-access'),
+  coverage: () => get<any>('/api/coverage'),
+  agentMode: (id: string) => get<any>(`/api/agents/mode?agent_id=${encodeURIComponent(id)}`),
+  setAgentMode: (id: string, mode: string) => post<any>('/api/agents/mode', { agent_id: id, mode }),
 }

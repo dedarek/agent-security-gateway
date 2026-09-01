@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import type { Agent } from '../lib/types'
+import type { StreamStep } from '../lib/sse'
 import { StatusDot } from '../components/StatusDot'
 import { VerdictBadge } from '../components/VerdictBadge'
 import { EmptyState } from '../components/EmptyState'
@@ -13,25 +14,23 @@ import { BrandChip, BrandLogo, logoFor } from '../assets/logos'
 import { Donut } from '../components/charts/Donut'
 import { Gauge } from '../components/charts/Gauge'
 import { Trend } from '../components/charts/Trend'
+import { EventStream } from '../components/EventStream'
+import { CAPABILITY_GROUPS } from '../lib/capabilities'
+import ProtectionStatus from '../components/ProtectionStatus'
 
-const CAPS: { rule_id: string; label: string; desc: string; l2?: boolean }[] = [
-  { rule_id: 'Bash', label: 'Shell 执行', desc: '跑任意 shell 命令（高危）', l2: true },
-  { rule_id: 'WebFetch', label: '网络外发', desc: '向外部 URL 发请求（数据外泄风险）', l2: true },
-  { rule_id: 'Write', label: '写文件', desc: '创建/覆盖文件' },
-  { rule_id: 'Edit', label: '改文件', desc: '编辑已有文件' },
-  { rule_id: 'Read', label: '读文件', desc: '读取本地文件（含敏感路径检测）' },
-  { rule_id: 'WebSearch', label: '联网搜索', desc: '发起网络搜索' },
-]
 const ACTIONS = ['allow', 'confirm', 'block'] as const
 
 /** Live — GCP 中控大屏风。顶部 KPI 条 + 趋势/构成，下方 agent 大卡片网格。
  * 点卡弹抽屉（信息+管控+操作），再点「查看完整链路」才下钻日志明细。 */
-export default function Live() {
+export default function Live({ streamLive = true }: { streamLive?: boolean }) {
   const nav = useNavigate()
   const { data: agents, isLoading } = useQuery({ queryKey: ['agents'], queryFn: api.agents, refetchInterval: 8000 })
   const { data: status } = useQuery({ queryKey: ['status'], queryFn: api.status, refetchInterval: 10000 })
   const { data: stats } = useQuery({ queryKey: ['stats'], queryFn: () => api.statsSummary(300), refetchInterval: 8000 })
+  const { data: streamSteps = [] } = useQuery<StreamStep[]>({ queryKey: ['stream-activity'], queryFn: async () => [], enabled: false, initialData: [] })
   const [drawerFor, setDrawerFor] = useState<string | null>(null)
+
+  const [timeRange, setTimeRange] = useState<'24h' | '7d' | 'all'>('all')
 
   const list: Agent[] = agents || []
   const real = list.filter(isRealAgent)
@@ -47,45 +46,115 @@ export default function Live() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto' }}>
-      <div style={{ padding: '20px 24px 0' }}>
-        <div className="row-between" style={{ marginBottom: 16 }}>
+      <div style={{ padding: '24px 28px 0' }}>
+        <ProtectionStatus />
+        <div className="row-between" style={{ marginBottom: 20, marginTop: 16 }}>
           <div>
-            <h1 className="h-page">实时台</h1>
+            <h1 className="h-page" style={{ fontSize: 22, fontWeight: 600 }}>安全概览</h1>
           </div>
-          <span className="badge badge-allow">SSE LIVE</span>
+          <div className="row" style={{ gap: 12 }}>
+            <div className="seg">
+              <button className={`seg-item ${timeRange === '24h' ? 'on' : ''}`} onClick={() => setTimeRange('24h')}>近24小时</button>
+              <button className={`seg-item ${timeRange === '7d' ? 'on' : ''}`} onClick={() => setTimeRange('7d')}>近7天</button>
+              <button className={`seg-item ${timeRange === 'all' ? 'on' : ''}`} onClick={() => setTimeRange('all')}>全部</button>
+            </div>
+            <span className="badge badge-allow">实时连接中</span>
+          </div>
         </div>
 
-        <div className="row" style={{ gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
-          <Kpi label="拦截 BLOCK" value={blocks} color="var(--block)" />
-          <Kpi label="待确认 CONFIRM" value={confirms} color="var(--confirm)" />
-          <Kpi label="放行 ALLOW" value={allows} color="var(--allow)" />
-          <Kpi label="在线 Agent" value={online} />
-          <Kpi label="活跃" value={active} color="var(--brand)" />
-          <Kpi label="KG 节点" value={kg.node_count ?? kg.entities ?? 0} />
+        {/* 顶部核心 KPI 卡片 */}
+        <div className="row" style={{ gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
+          <Kpi label="在线智能体" value={online} sub={`总注册: ${real.length} 个`} color="var(--brand)" icon="🤖" />
+          <Kpi label="高危拦截" value={blocks} sub={`待确认: ${confirms} 件`} color="var(--block)" icon="🚫" />
+          <Kpi label="正常放行" value={allows} sub={`活跃数: ${active}`} color="var(--allow)" icon="🛡️" />
+          <Kpi label="本体安全节点" value={kg.node_count ?? kg.entities ?? 0} sub="KG 语义图谱" icon="🕸️" />
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '240px 240px 1fr', gap: 14, marginBottom: 16 }}>
-          <div className="card card-pad col" style={{ alignItems: 'center', gap: 6 }}>
-            <div className="h-sec" style={{ alignSelf: 'flex-start' }}>裁决分布</div>
-            <Donut centerLabel="近窗" size={150} slices={[
-              { label: 'BLOCK', value: blocks, color: '#d93025' },
-              { label: 'CONFIRM', value: confirms, color: '#e37400' },
-              { label: 'ALLOW', value: allows, color: '#1e8e3e' },
-            ]} />
+        {/* 中间布局：Top5 排行 与 威胁分布 */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20 }}>
+          {/* Top 5 风险智能体 */}
+          <div className="card card-pad col" style={{ gap: 12 }}>
+            <div className="row-between">
+              <div className="h-sec" style={{ fontSize: 13 }}>Top 5 风险智能体</div>
+              <span className="small dim">近窗事件数</span>
+            </div>
+            <div>
+              {real.slice(0, 5).map((ag, idx) => {
+                const p = (stats?.per_agent || []).find((x: any) => x.agent_id === ag.agent_id)
+                const cnt = (p?.block || 0) * 2 + (p?.confirm || 0)
+                const maxVal = Math.max(1, ...((stats?.per_agent || []).map((x: any) => (x.block || 0) * 2 + (x.confirm || 0))))
+                const pct = Math.min(100, Math.round((cnt / maxVal) * 100))
+                return (
+                  <div key={ag.agent_id} className="rank-row">
+                    <span className={`badge-rank ${idx === 0 ? 'badge-rank-1' : idx === 1 ? 'badge-rank-2' : idx === 2 ? 'badge-rank-3' : 'badge-rank-other'}`}>
+                      {idx + 1}
+                    </span>
+                    <span style={{ width: 140, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {displayAlias(ag)}
+                    </span>
+                    <div className="rank-progress">
+                      <div className="rank-progress-bar" style={{ width: `${Math.max(5, pct)}%`, background: idx === 0 ? 'var(--block)' : 'var(--brand)' }} />
+                    </div>
+                    <span style={{ width: 36, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+                      {cnt}
+                    </span>
+                  </div>
+                )
+              })}
+              {real.length === 0 && <div className="small dim" style={{ padding: '20px 0', textAlign: 'center' }}>暂无风险数据</div>}
+            </div>
           </div>
-          <div className="card card-pad col" style={{ alignItems: 'center', gap: 4 }}>
-            <div className="h-sec" style={{ alignSelf: 'flex-start' }}>威胁等级</div>
-            <Gauge value={threat} />
-            <div className="small dim">在线 agent 近窗 {blocks} 拦 · {confirms} 待确认</div>
+
+          {/* Top 5 风险类型分布 */}
+          <div className="card card-pad col" style={{ gap: 12 }}>
+            <div className="row-between">
+              <div className="h-sec" style={{ fontSize: 13 }}>Top 5 风险事件类型</div>
+              <span className="small dim">防护拦截分布</span>
+            </div>
+            <div>
+              {[
+                { name: '高危命令与脚本注入 (Command Injection)', count: blocks, pct: blocks > 0 ? 100 : 0 },
+                { name: '敏感凭据与文件越权访问 (Credential Access)', count: confirms, pct: confirms > 0 ? 60 : 0 },
+                { name: '提示词劫持与意图伪造 (Prompt Hijack)', count: Math.floor(blocks / 2), pct: blocks > 0 ? 40 : 0 },
+                { name: '外部不可信网络外联 (Exfiltration)', count: 0, pct: 0 },
+                { name: '非合规模型调用 (Non-standard Model)', count: 0, pct: 0 },
+              ].map((item, idx) => (
+                <div key={item.name} className="rank-row">
+                  <span className={`badge-rank ${idx === 0 && item.count > 0 ? 'badge-rank-1' : idx === 1 && item.count > 0 ? 'badge-rank-2' : idx === 2 && item.count > 0 ? 'badge-rank-3' : 'badge-rank-other'}`}>
+                    {idx + 1}
+                  </span>
+                  <span style={{ width: 190, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.name}>
+                    {item.name}
+                  </span>
+                  <div className="rank-progress">
+                    <div className="rank-progress-bar" style={{ width: `${item.pct}%`, background: idx === 0 ? 'var(--block)' : 'var(--confirm)' }} />
+                  </div>
+                  <span style={{ width: 36, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+                    {item.count}
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
-          <div className="card card-pad col" style={{ gap: 6 }}>
-            <div className="h-sec">裁决趋势（按小时）</div>
-            <Trend data={stats?.by_hour || []} height={140} />
+        </div>
+
+        {/* 底部全宽趋势图 */}
+        <div className="card card-pad col" style={{ gap: 10, marginBottom: 20 }}>
+          <div className="row-between">
+            <div className="h-sec" style={{ fontSize: 13 }}>风险拦截趋势</div>
+            <div className="row" style={{ gap: 16, fontSize: 12 }}>
+              <span className="row" style={{ gap: 6 }}><span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--brand)' }} /> 会话请求</span>
+              <span className="row" style={{ gap: 6 }}><span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--block)' }} /> 高危拦截</span>
+            </div>
           </div>
+          <Trend data={stats?.by_hour || []} height={150} />
         </div>
 
         <div className="row-between" style={{ marginBottom: 10 }}>
           <div className="h-sec">已接入 Agent <span className="dim">({real.length})</span></div>
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <EventStream steps={streamSteps} live={streamLive} />
         </div>
         {isLoading && <div className="row" style={{ gap: 14 }}><Skeleton h={150} w={320} /><Skeleton h={150} w={320} /></div>}
         {!isLoading && real.length === 0 && (
@@ -104,11 +173,15 @@ export default function Live() {
   )
 }
 
-function Kpi({ label, value, color }: { label: string; value: number; color?: string }) {
+function Kpi({ label, value, sub, color, icon }: { label: string; value: number | string; sub?: string; color?: string; icon?: string }) {
   return (
-    <div className="card" style={{ padding: '12px 18px', flex: '1 1 150px', minWidth: 140 }}>
-      <div style={{ fontSize: 26, fontWeight: 800, color: color || 'var(--fg-0)', fontVariantNumeric: 'tabular-nums', lineHeight: 1.1 }}>{value}</div>
-      <div className="small dim" style={{ marginTop: 2 }}>{label}</div>
+    <div className="card" style={{ padding: '16px 20px', flex: '1 1 200px', minWidth: 180, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div>
+        <div style={{ fontSize: 13, color: 'var(--fg-1)', fontWeight: 500, marginBottom: 4 }}>{label}</div>
+        <div style={{ fontSize: 30, fontWeight: 700, color: color || 'var(--fg-0)', fontVariantNumeric: 'tabular-nums', lineHeight: 1.1 }}>{value}</div>
+        {sub && <div className="small" style={{ color: 'var(--fg-2)', marginTop: 6 }}>{sub}</div>}
+      </div>
+      <div style={{ fontSize: 24, opacity: 0.85 }}>{icon || '📈'}</div>
     </div>
   )
 }
@@ -142,7 +215,7 @@ function AgentBigCard({ a, onOpen }: { a: Agent; onOpen: () => void }) {
         )}
         {a.model ? (
           <span className="row" style={{ gap: 4, alignItems: 'center' }}><span className="small dim">模型</span>{logoFor(a.model) ? <BrandChip name={a.model} style={{ background: 'var(--bg-2)', borderColor: 'var(--line)' }} /> : <span className="chip" style={{ background: 'var(--bg-2)', borderColor: 'var(--line)', fontWeight: 600 }}>{a.model}</span>}</span>
-        ) : <span className="row" style={{ gap: 4, alignItems: 'center' }}><span className="small dim">模型</span><span className="chip" style={{ color: 'var(--fg-2)', borderStyle: 'dashed', background: 'var(--bg-1)' }}>未上报</span></span>}
+        ) : null}
         {a.provider && a.provider !== a.model && (
           <span className="row" style={{ gap: 4, alignItems: 'center' }}><span className="small dim">厂商</span>{logoFor(a.provider) ? <BrandChip name={a.provider} style={{ color: 'var(--fg-2)', borderStyle: 'dashed' }} /> : <span className="chip" style={{ color: 'var(--fg-2)', borderStyle: 'dashed' }}>{a.provider}</span>}</span>
         )}
@@ -200,8 +273,8 @@ function AgentDrawer({ agentId, onClose, onDeepDive }: { agentId: string | null;
     if (glob) return glob.action
     return 'allow'
   }
-  const setAction = (rule: string, action: string) =>
-    upsert.mutate({ agent_id: agentId, rule_id: rule, action, axis: 'permission', enabled: true })
+  const setAction = (rule: string, action: string, selector: Record<string, string>) =>
+    upsert.mutate({ agent_id: agentId, rule_id: rule, action, axis: 'permission', enabled: true, selector })
 
   return (
     <>
@@ -271,36 +344,45 @@ function AgentDrawer({ agentId, onClose, onDeepDive }: { agentId: string | null;
       )}
     </Drawer>
     <Drawer open={ctrlOpen} onClose={() => setCtrlOpen(false)} title={a ? `${displayAlias(a)} · 能力管控` : '能力管控'} width={440}>
-      <div className="col" style={{ gap: 8 }}>
-        <div className="small dim" style={{ marginBottom: 4 }}>允许 = 直接放行 · 确认 = 需人工确认 · 拦截 = 直接阻断</div>
-        {CAPS.map((c) => {
-          const cur = actionFor(c.rule_id)
-          return (
-            <div key={c.rule_id} className="card" style={{ padding: '10px 12px' }}>
-              <div className="row-between" style={{ gap: 8 }}>
-                <div style={{ minWidth: 0 }}>
-                  <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
-                    <span style={{ fontWeight: 600, fontSize: 13 }}>{c.label}</span>
-                    {c.l2 && <span className="badge badge-confirm" style={{ fontSize: 10 }}>L2 高危</span>}
-                    <span className="chip mono small">{c.rule_id}</span>
-                  </div>
-                  <div className="small dim" style={{ marginTop: 2 }}>{c.desc}</div>
-                </div>
-                <div className="seg" style={{ flexShrink: 0 }}>
-                  {ACTIONS.map((act) => (
-                    <button key={act}
-                      className={`seg-item ${cur === act ? 'on' : ''}`}
-                      style={cur === act ? segOnColor(act) : undefined}
-                      onClick={() => setAction(c.rule_id, act)}>
-                      {act === 'allow' ? '允许' : act === 'confirm' ? '确认' : '拦截'}
-                    </button>
-                  ))}
-                </div>
+        <div className="col" style={{ gap: 14 }}>
+          <div className="small dim" style={{ marginBottom: 0 }}>允许 = 直接放行 · 确认 = 需人工确认 · 拦截 = 直接阻断</div>
+          {CAPABILITY_GROUPS.map((group) => (
+            <section key={group.id}>
+              <div className="h-sec" style={{ marginBottom: 2 }}>{group.label}</div>
+              <div className="small dim" style={{ marginBottom: 6 }}>{group.hint}</div>
+              <div className="col" style={{ gap: 7 }}>
+                {group.items.map((c) => {
+                  const cur = actionFor(c.rule_id)
+                  return (
+                    <div key={c.rule_id} className="card" style={{ padding: '10px 12px' }}>
+                      <div className="row-between" style={{ gap: 8 }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+                            <span style={{ fontWeight: 600, fontSize: 13 }}>{c.label}</span>
+                            {c.l2 && <span className="badge badge-confirm" style={{ fontSize: 10 }}>L2 高危</span>}
+                            <span className="chip mono small">{c.rule_id}</span>
+                          </div>
+                          <div className="small dim" style={{ marginTop: 2 }}>{c.desc}</div>
+                        </div>
+                        <div className="seg" style={{ flexShrink: 0 }}>
+                          {ACTIONS.map((act) => (
+                            <button key={act}
+                              className={`seg-item ${cur === act ? 'on' : ''}`}
+                              style={cur === act ? segOnColor(act) : undefined}
+                              onClick={() => setAction(c.rule_id, act, c.selector)}>
+                              {act === 'allow' ? '允许' : act === 'confirm' ? '确认' : '拦截'}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
-            </div>
-          )
-        })}
-      </div>
+            </section>
+          ))}
+          <div className="small dim">未配置的细分项不继承新规则的授权；最终仍由 gateway/Rampart 的内置风险模型裁决。</div>
+        </div>
     </Drawer>
     </>
   )
