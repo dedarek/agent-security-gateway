@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -82,6 +83,17 @@ func (p *llmProxy) handleAnthropicBridge(w http.ResponseWriter, r *http.Request)
 
 	cb, _ := json.Marshal(chat)
 
+	// Provider key wins; when the config leaves it empty (env-reference style
+	// like "${COMMANDCODE_API_KEY}" resolving to ""), fall back to the env
+	// var the provider is named after — same rule as responses.go.
+	apiKey := prov.APIKey
+	if apiKey == "" {
+		apiKey = os.Getenv(strings.ToUpper(prov.Name) + "_API_KEY")
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv("COMMANDCODE_API_KEY")
+	}
+
 	// Forward to upstream chat/completions
 	upURL := strings.TrimSuffix(prov.BaseURL, "/")
 	if !strings.HasSuffix(upURL, "/v1") {
@@ -91,8 +103,8 @@ func (p *llmProxy) handleAnthropicBridge(w http.ResponseWriter, r *http.Request)
 
 	httpReq, _ := http.NewRequestWithContext(r.Context(), "POST", upURL, strings.NewReader(string(cb)))
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+prov.APIKey)
-	httpReq.Header.Set("x-api-key", prov.APIKey)
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	httpReq.Header.Set("x-api-key", apiKey)
 
 	start := time.Now()
 	client := &http.Client{Timeout: 5 * time.Minute}
