@@ -5,15 +5,19 @@ import Live from './pages/Live'
 import DlpDemo from './pages/DlpDemo'
 import AgentDetail from './pages/AgentDetail'
 import Insight from './pages/Insight'
+import Fleet from './pages/Fleet'
+import Control from './pages/Control'
+import SemanticaPage from './pages/SemanticaPage'
 
 const qc = new QueryClient()
 
 const NAV_GROUPS = [
   {
-    title: '概览 & 审计',
+    title: '概览 & 洞察',
     items: [
       { to: '/', label: '安全概览', icon: '🛡️', end: true },
       { to: '/insight', label: '本体洞察', icon: '📊' },
+      { to: '/semantica', label: '知识图谱', icon: '🕸️' },
     ]
   },
   {
@@ -71,12 +75,13 @@ function Shell() {
       <main style={{ overflow: 'auto', minHeight: 0, background: 'var(--bg-0)' }}>
         <Routes>
           <Route path="/" element={<Live streamLive={stream === 'live'} />} />
-          <Route path="/agents" element={<Live streamLive={stream === 'live'} />} />
-          <Route path="/policies" element={<Live streamLive={stream === 'live'} />} />
+          <Route path="/agents" element={<Fleet />} />
+          <Route path="/policies" element={<Control />} />
           <Route path="/dlp" element={<DlpDemo />} />
           <Route path="/agent/:id" element={<AgentDetail />} />
           <Route path="/fleet/:id" element={<AgentDetail />} />
           <Route path="/insight" element={<Insight />} />
+          <Route path="/semantica" element={<SemanticaPage />} />
         </Routes>
       </main>
     </div>

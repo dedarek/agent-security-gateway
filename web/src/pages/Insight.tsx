@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
@@ -90,7 +91,7 @@ function Findings() {
         <div className="col" style={{ gap: 8 }}>
           {all.map(({ src, x, key }) => {
             const sev = severity(x)
-            const title = x.title || x.rule || x.kind || x.type || 'finding'
+            const title = (x && (x.title || x.rule || x.kind || x.type)) || 'finding'
             return (
               <div key={key} className="card card-hover" style={{ borderLeft: `3px solid ${sevColor(sev)}` }}>
                 <button className="card-pad row" style={{ gap: 10, width: '100%', background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', textAlign: 'left' }}
@@ -116,37 +117,106 @@ function Findings() {
 
 function Sessions({ focus }: { focus: string }) {
   const { data, isLoading } = useQuery({ queryKey: ['sessions'], queryFn: api.sessions, refetchInterval: 8000 })
-  const list = (data || []) as any[]
+  const { data: events } = useQuery({ queryKey: ['events'], queryFn: api.events, refetchInterval: 8000 })
+  const list = ((data || []) as any[]).sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0))
+  const [sel, setSel] = useState<string | null>(focus || null)
+
+  const evs = (events || []) as any[]
+  const selEvents = sel ? evs.filter((e: any) => e.SessionID === sel || e.session_id === sel) : []
+
   return (
-    <div style={{ padding: 22 }}>
-      <div className="card" style={{ overflow: 'hidden' }}>
+    <div style={{ padding: 22, display: 'grid', gridTemplateColumns: sel ? '320px 1fr' : '1fr', gap: 14 }}>
+      {/* 会话列表 */}
+      <div className="card" style={{ overflow: 'hidden', alignSelf: 'start' }}>
+        <div className="card-pad row-between" style={{ borderBottom: '1px solid var(--line)' }}>
+          <div className="h-sec">会话</div>
+          <span className="small dim">{list.length}</span>
+        </div>
         {isLoading ? <SkeletonRows n={5} /> : (
-          <table className="table">
-            <thead><tr><th>Session</th><th>事件数</th><th>最终裁决</th></tr></thead>
-            <tbody>
-              {list.map((s: any) => (
-                <tr key={s.session_id} style={focus === s.session_id ? { background: 'rgba(245,166,35,.07)', borderLeft: '3px solid var(--brand)' } : undefined}>
-                  <td className="mono small">{s.session_id}</td>
-                  <td className="small" style={{ textAlign: 'center' }}>{s.events}</td>
-                  <td style={{ textAlign: 'center' }}><VerdictBadge v={s.last_verdict} /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div style={{ maxHeight: 520, overflowY: 'auto' }}>
+            {list.map((s: any) => {
+              const active = sel === s.session_id
+              const verdict = (s.last_verdict || '').toLowerCase()
+              return (
+                <button
+                  key={s.session_id}
+                  onClick={() => setSel(active ? null : s.session_id)}
+                  style={{
+                    display: 'block', width: '100%', textAlign: 'left', padding: '10px 14px', cursor: 'pointer',
+                    background: active ? 'rgba(22,93,255,.06)' : 'none', border: 'none', borderBottom: '1px solid var(--line)',
+                    color: 'inherit',
+                  }}
+                >
+                  <div className="row-between">
+                    <span className="small mono" style={{ fontWeight: 600 }}>{String(s.session_id).slice(0, 20)}…</span>
+                    <VerdictBadge v={s.last_verdict} />
+                  </div>
+                  <div className="small dim" style={{ marginTop: 4 }}>
+                    {s.events ?? 0} 事件
+                    {s.agent_id ? ` · ${s.agent_id}` : ''}
+                    {verdict === 'block' && <span style={{ color: 'var(--block)' }}> · ⚠ 有拦截</span>}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
         )}
         {!isLoading && list.length === 0 && <EmptyState icon="◌" title="暂无会话" />}
       </div>
+
+      {/* 会话详情 */}
+      {sel && (
+        <div className="card card-pad" style={{ alignSelf: 'start' }}>
+          <div className="row-between" style={{ marginBottom: 12 }}>
+            <div>
+              <div className="h-sec">会话详情</div>
+              <div className="small mono dim">{sel}</div>
+            </div>
+            <span className="small dim">{selEvents.length} 条事件</span>
+          </div>
+          {selEvents.length === 0 ? (
+            <EmptyState icon="◌" title="该会话暂无事件" hint="触发一些工具调用后这里会显示时间线。" />
+          ) : (
+            <div className="timeline">
+              {selEvents.map((e: any, i: number) => {
+                const tool = e.Call?.ToolID || e.tool_name || ''
+                const verdict = e.Decision?.Final || e.verdict || 'ALLOW'
+                const ts = e.Timestamp || e.ts
+                const time = ts ? new Date(ts).toLocaleTimeString('zh-CN', { hour12: false }) : ''
+                const args = e.Call?.Arguments || e.arguments
+                let argText = ''
+                try {
+                  if (typeof args === 'string') argText = JSON.stringify(JSON.parse(args))?.slice(0, 120)
+                  else if (args) argText = JSON.stringify(args)?.slice(0, 120)
+                } catch { argText = String(args || '').slice(0, 120) }
+                return (
+                  <div key={i} className={`timeline-item t-${String(verdict).toLowerCase()}`}>
+                    <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                      <span className="small dim mono">{time}</span>
+                      <span className="chip">{tool}</span>
+                      <VerdictBadge v={verdict} />
+                    </div>
+                    {argText && <div className="small dim mono" style={{ marginTop: 3, wordBreak: 'break-all' }}>{argText}</div>}
+                    {e.Decision?.Rationale && <div className="small" style={{ color: verdict === 'BLOCK' ? 'var(--block)' : 'var(--fg-2)', marginTop: 2 }}>{e.Decision.Rationale}</div>}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
 
 function asList(x: any): any[] {
   if (!x) return []
-  if (Array.isArray(x)) return x
-  if (Array.isArray(x.findings)) return x.findings
+  if (Array.isArray(x)) return x.filter(Boolean)
+  if (Array.isArray(x.findings)) return x.findings.filter(Boolean)
   return [x]
 }
 function severity(x: any): string {
+  if (!x || typeof x !== 'object') return 'low'
   const s = String(x.severity || x.level || x.verdict || '').toLowerCase()
   if (s.includes('block') || s.includes('high') || s.includes('crit')) return 'high'
   if (s.includes('confirm') || s.includes('med') || s.includes('warn')) return 'medium'
