@@ -133,5 +133,6 @@ func (s *Server) handlePoliciesDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) RegisterPerAgentPolicyAPI(mux *http.ServeMux) {
+	mux.HandleFunc("/api/policies/simulate", s.Auth.middleware(s.apiPolicySimulate))
 	mux.HandleFunc("/api/policies", s.Auth.middleware(s.apiPolicies))
 }
