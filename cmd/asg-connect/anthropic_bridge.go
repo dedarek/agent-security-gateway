@@ -299,7 +299,57 @@ func convertAnthroMessages(system json.RawMessage, messages []anthroMsg) []map[s
 				}
 			}
 		} else {
-			json.Unmarshal(m.Content, &contentText)
+			// Fallback: content may be a JSON *string* whose value is itself a
+			// blocks array (Claude Code can serialize content blocks into a
+			// quoted string). Decode one layer, then re-run the block parser.
+			var inner string
+			if json.Unmarshal(m.Content, &inner) == nil && strings.TrimSpace(inner) != "" {
+				if json.Unmarshal([]byte(inner), &blocks) == nil {
+					for _, block := range blocks {
+						bt, _ := block["type"].(string)
+						switch bt {
+						case "text":
+							t, _ := block["text"].(string)
+							contentText += t
+						case "tool_result":
+							id, _ := block["tool_use_id"].(string)
+							tc, _ := block["content"].(string)
+							if tc == "" {
+								if arr, ok := block["content"].([]any); ok {
+									for _, item := range arr {
+										im, _ := item.(map[string]any)
+										if im["type"] == "text" {
+											tc += im["text"].(string)
+										}
+									}
+								}
+							}
+							out = append(out, map[string]any{"role": "tool", "tool_call_id": id, "content": tc})
+							continue
+						case "tool_use":
+							name, _ := block["name"].(string)
+							input := block["input"]
+							tuID, _ := block["id"].(string)
+							argsStr := ""
+							if input != nil {
+								if s, ok := input.(string); ok {
+									argsStr = s
+								} else if b, err := json.Marshal(input); err == nil {
+									argsStr = string(b)
+								}
+							}
+							toolCalls = append(toolCalls, map[string]any{
+								"id": tuID, "type": "function",
+								"function": map[string]any{"name": name, "arguments": argsStr},
+							})
+						}
+					}
+				} else {
+					contentText = inner
+				}
+			} else {
+				json.Unmarshal(m.Content, &contentText)
+			}
 		}
 
 		if role == "user" {
