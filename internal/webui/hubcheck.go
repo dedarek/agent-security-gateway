@@ -39,7 +39,17 @@ func (s *Server) apiHubCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Decision engine (if wired): Cedar / taint / DLP.
+	// 2. V0 session-level taint: if this session previously read sensitive
+	// data (credential/secret taint) and this call transmits to an external
+	// destination, BLOCK before it leaves the trust boundary.
+	if s.Taints != nil && len(s.Taints(payload.SessionID)) > 0 && isExternalSinkTool(payload.ToolName, payload.ToolInput) {
+		src := s.Taints(payload.SessionID)[0].Source
+		reason := "DLP: session carries sensitive data (from " + src + ") and this call transmits externally"
+		s.reportHookTool(payload, "BLOCK", reason)
+		writeBlock(w, reason)
+		return
+	}
+	// 3. Decision engine (if wired): Cedar / taint / DLP.
 	if s.Engine != nil {
 		call := &api.ToolCall{
 			CallID:    "hook-" + payload.ToolName,
@@ -54,6 +64,17 @@ func (s *Server) apiHubCheck(w http.ResponseWriter, r *http.Request) {
 			writeBlock(w, reason)
 			return
 		}
+		// Observe the call so data-flow state (taint) accumulates for the
+		// session — the cross-tool propagation primitive. EvaluatePre above
+		// runs with this call's OWN provenance; ObserveHook records it.
+		// Re-wrap tool_input so hookParts can parse it (it expects the
+		// {tool_input: ...} envelope).
+		hookPayload, _ := json.Marshal(map[string]any{
+			"session_id": payload.SessionID,
+			"tool_name":  payload.ToolName,
+			"tool_input": payload.ToolInput,
+		})
+		s.Engine.ObserveHook(payload.SessionID, payload.ToolName, hookPayload)
 	}
 
 	// 3. Allow + record for audit.
@@ -138,4 +159,44 @@ func localHookVerdict(tool string, input json.RawMessage) string {
 		}
 	}
 	return ""
+}
+
+// isExternalSinkTool reports whether a tool call transmits data to an
+// external (non-local) destination: curl/wget/http/scp/ssh/nc pointing at a
+// public host or IP. V0: conservative — any of these tools with a URL/IP is
+// treated as an external sink.
+func isExternalSinkTool(tool string, input json.RawMessage) bool {
+	name := strings.ToLower(tool)
+	s := strings.ToLower(string(input))
+	// Generic exec tools (Bash/Write/Exec) are sinks when the COMMAND
+	// contains an egress tool + URL/host.
+	isGeneric := strings.Contains(name, "bash") || strings.Contains(name, "write") ||
+		strings.Contains(name, "exec") || strings.Contains(name, "shell") ||
+		strings.Contains(name, "run")
+	if isGeneric {
+		hasEgress := strings.Contains(s, "curl") || strings.Contains(s, "wget") ||
+			strings.Contains(s, "scp") || strings.Contains(s, "ssh") ||
+			strings.Contains(s, "nc ") || strings.Contains(s, "http://") ||
+			strings.Contains(s, "https://")
+		return hasEgress && (strings.Contains(s, "http://") || strings.Contains(s, "https://") ||
+			strings.Contains(s, ".com") || strings.Contains(s, ".org") || strings.Contains(s, ".net") ||
+			strings.Contains(s, ".io"))
+	}
+	// Dedicated network tools.
+	isSinkTool := strings.Contains(name, "curl") || strings.Contains(name, "wget") ||
+		strings.Contains(name, "http") || strings.Contains(name, "scp") ||
+		strings.Contains(name, "ssh") || strings.Contains(name, "nc") ||
+		strings.Contains(name, "send_email") || strings.Contains(name, "post")
+	if !isSinkTool {
+		return false
+	}
+	if strings.Contains(s, "http://") || strings.Contains(s, "https://") {
+		return true
+	}
+	for _, tok := range []string{".com", ".org", ".net", ".io", ".cn", ".ru"} {
+		if strings.Contains(s, tok) && (strings.Contains(s, "curl") || strings.Contains(s, "wget")) {
+			return true
+		}
+	}
+	return false
 }

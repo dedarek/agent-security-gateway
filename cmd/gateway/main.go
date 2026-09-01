@@ -225,6 +225,7 @@ func serveCmd(args []string) {
 	}
 	uiSrv.SetEngine(reg)
 	uiSrv.SetDataAccess(engine.NewDataAccessRecorder(dbHandle, taint))
+	uiSrv.SetTaints(taint.SessionTaints)
 	if dbHandle != nil {
 		webui.SetPoliciesDB(dbHandle)
 	}

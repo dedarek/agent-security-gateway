@@ -58,6 +58,15 @@ func (t *TaintEngine) FailMode() api.FailMode { return t.failMode }
 // IsUntrustedSource reports whether a tool's output should be marked untrusted.
 func (t *TaintEngine) IsUntrustedSource(toolID string) bool { return t.sources[lastSegment(toolID)] }
 
+// SessionTaints returns the accumulated untrusted marks for a session
+// (V0 session-level taint: any sensitive read taints the whole session).
+func (t *TaintEngine) SessionTaints(sessionID string) []session.TaintMark {
+	if t == nil || t.store == nil {
+		return nil
+	}
+	return t.store.Taints(sessionID)
+}
+
 // ObserveResult is called by the proxy after a tool returns. If the tool is an
 // untrusted source, its output content is recorded as a taint mark with the
 // extracted tokens. This is the propagation step.

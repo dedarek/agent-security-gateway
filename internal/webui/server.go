@@ -16,6 +16,7 @@ import (
 
 	"github.com/dedarek/agent-security-gateway/api"
 	"github.com/dedarek/agent-security-gateway/internal/activity"
+	"github.com/dedarek/agent-security-gateway/internal/session"
 	"github.com/dedarek/agent-security-gateway/internal/agentregistry"
 	"github.com/dedarek/agent-security-gateway/internal/approval"
 	"github.com/dedarek/agent-security-gateway/internal/engine"
@@ -56,6 +57,9 @@ type Server struct {
 	kgLive func(ev api.Event)
 	// DataAccess records data-flow hops for ingested tool calls (hook path).
 	DataAccess DataAccessObserver
+	// Taints returns accumulated session taints (V0 DLP). Wired to the
+	// taint engine by the gateway.
+	Taints func(sessionID string) []session.TaintMark
 }
 
 // DataAccessObserver is implemented by engine.DataAccessRecorder.
@@ -90,6 +94,9 @@ func (s *Server) SetEngine(e *engine.Registry) { s.Engine = e }
 
 // SetDataAccess wires the data-lineage recorder (hook/ingest path).
 func (s *Server) SetDataAccess(r DataAccessObserver) { s.DataAccess = r }
+
+// SetTaints wires the session-taint query (V0 DLP) to the taint engine.
+func (s *Server) SetTaints(f func(sessionID string) []session.TaintMark) { s.Taints = f }
 
 func (s *Server) SetIngestAuth(f func(header string) bool) { s.ingestAuth = f }
 
