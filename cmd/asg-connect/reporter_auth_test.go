@@ -24,7 +24,7 @@ func TestReporterOmitsAuthorizationWhenTenantKeyIsEmpty(t *testing.T) {
 	if gotAuthorization != "" {
 		t.Fatalf("expected no authorization header without tenant key, got %q", gotAuthorization)
 	}
-	result, _, err := r.hubCheck(context.Background(), "session", "tool", []byte(`{}`))
+	result, _, err := r.hubCheck(context.Background(), "session", "ag", "tool", []byte(`{}`))
 	if err != nil || result != "ALLOW" {
 		t.Fatalf("hub-check failed: result=%q err=%v", result, err)
 	}

@@ -195,9 +195,10 @@ func (r *reporter) ship(batch []byte) error {
 }
 
 // hubCheck asks the central gateway for a verdict on a tool call (Hook PEP).
-func (r *reporter) hubCheck(ctx context.Context, sessionID, toolID string, args []byte) (verdict, reason string, err error) {
+func (r *reporter) hubCheck(ctx context.Context, sessionID, agentID, toolID string, args []byte) (verdict, reason string, err error) {
 	body, _ := json.Marshal(map[string]any{
 		"session_id": sessionID,
+		"agent_id":   agentID,
 		"tool_name":  toolID,
 		"tool_input": jsonRaw(args),
 	})

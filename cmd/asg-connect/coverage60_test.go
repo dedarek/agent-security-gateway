@@ -614,7 +614,7 @@ func TestHubCheck(t *testing.T) {
 	}))
 	defer srv.Close()
 	rep := newReporter(srv.URL, "k", "", "t", "a")
-	v, _, err := rep.hubCheck(context.Background(), "sess", "tool", []byte(`{}`))
+	v, _, err := rep.hubCheck(context.Background(), "sess", "ag", "tool", []byte(`{}`))
 	if err != nil {
 		t.Fatalf("hubCheck: %v", err)
 	}

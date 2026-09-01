@@ -44,7 +44,7 @@ func hookHTTPHandler(cfg *ProbeConfig, rep *reporter) http.HandlerFunc {
 		// Fail-open: if the hub is unreachable, local rules already passed,
 		// so allow (availability > enforcement); a BLOCK from the hub still
 		// stops the tool.
-		hubVerdict, hubReason, err := rep.hubCheck(r.Context(), sessionID, payload.ToolName, payload.ToolInput)
+		hubVerdict, hubReason, err := rep.hubCheck(r.Context(), sessionID, cfg.AgentID, payload.ToolName, payload.ToolInput)
 		if err == nil && hubVerdict == "BLOCK" {
 			rep.ReportTool(sessionID, "hook."+payload.ToolName, payload.ToolInput, "BLOCK", hubReason)
 			w.Header().Set("Content-Type", "application/json")

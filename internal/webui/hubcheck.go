@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/dedarek/agent-security-gateway/api"
+	"github.com/dedarek/agent-security-gateway/internal/agentregistry"
 )
 
 // apiHubCheck is the Hook PEP endpoint. Claude Code's PreToolUse hook POSTs
@@ -23,12 +24,30 @@ func (s *Server) apiHubCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	var payload struct {
 		SessionID string          `json:"session_id"`
+		AgentID   string          `json:"agent_id"`
 		ToolName  string          `json:"tool_name"`
 		ToolInput json.RawMessage `json:"tool_input"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 		return
+	}
+
+	// 0. Administrative protection mode (Kill Switch) — takes precedence over
+	// all policy rules. KILL denies everything; QUARANTINE allows reads and
+	// local analysis only.
+	if s.Agents != nil {
+		mode := s.Agents.ModeOf(payload.AgentID)
+		if mode != agentregistry.ModeNormal {
+			transmits := isExternalSinkTool(payload.ToolName, payload.ToolInput)
+			writes := isWriteTool(payload.ToolName, payload.ToolInput)
+			destructive := localHookVerdict(payload.ToolName, payload.ToolInput) != ""
+			if allow, why := mode.Allows(destructive, transmits, writes); !allow {
+				s.reportHookTool(payload, "BLOCK", why)
+				writeBlock(w, why)
+				return
+			}
+		}
 	}
 
 	// 1. Deterministic local rules (dangerous patterns) — fast path, no engine.
@@ -86,6 +105,7 @@ func (s *Server) apiHubCheck(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) reportHookTool(payload struct {
 	SessionID string          `json:"session_id"`
+	AgentID   string          `json:"agent_id"`
 	ToolName  string          `json:"tool_name"`
 	ToolInput json.RawMessage `json:"tool_input"`
 }, verdict, reason string) {
@@ -166,6 +186,24 @@ func localHookVerdict(tool string, input json.RawMessage) string {
 		}
 	}
 	return ""
+}
+
+// isWriteTool reports whether a tool call mutates local state: Write/Edit
+// tools, or shell commands with redirection/tee/mv/rm/cp.
+func isWriteTool(tool string, input json.RawMessage) bool {
+	name := strings.ToLower(tool)
+	s := strings.ToLower(string(input))
+	if strings.Contains(name, "write") || strings.Contains(name, "edit") ||
+		strings.Contains(name, "patch") || strings.Contains(name, "create_file") {
+		return true
+	}
+	// shell mutation patterns
+	for _, p := range []string{">", ">>", "tee ", "mv ", "rm ", "cp ", "chmod ", "chown ", "mkdir ", "touch "} {
+		if strings.Contains(s, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // isExternalSinkTool reports whether a tool call transmits data to an

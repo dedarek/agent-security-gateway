@@ -1,7 +1,9 @@
 package agentregistry
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -15,36 +17,37 @@ import (
 
 // Record is the minimal durable identity of one Agent process installation.
 type Record struct {
-	SessionID        string    `json:"session_id"`
-	AgentID          string    `json:"agent_id"`
-	ProbeID          string    `json:"probe_id"`
-	MachineID        string    `json:"machine_id"`
-	MachineName      string    `json:"machine_name"`
-	Alias            string    `json:"alias"`
-	AgentType        string    `json:"agent_type"`
-	ProcessID        int       `json:"process_id"`
-	OS               string    `json:"os"`
-	User             string    `json:"user"`
-	IP               string    `json:"ip"`
-	DeclaredIPs      []string  `json:"declared_ips,omitempty"`
-	ObservedIPs      []string  `json:"observed_ips,omitempty"`
-	ConnectionIP     string    `json:"connection_ip,omitempty"`
-	Model            string    `json:"model"`
-	Provider         string    `json:"provider"`
-	DeclaredModel    string    `json:"declared_model,omitempty"`
-	ObservedModel    string    `json:"observed_model,omitempty"`
-	DeclaredProvider string    `json:"declared_provider,omitempty"`
-	ObservedProvider string    `json:"observed_provider,omitempty"`
-	Status           string    `json:"status"`
-	Isolation        string    `json:"isolation"`
-	SessionIDs       []string  `json:"session_ids,omitempty"`
-	RegisteredAt     time.Time `json:"registered_at"`
-	LastHeartbeat    time.Time `json:"last_heartbeat"`
-	LastActivity     time.Time `json:"last_activity"`
-	StateChangedAt   time.Time `json:"state_changed_at,omitempty"`
-	StateChangedBy   string    `json:"state_changed_by,omitempty"`
-	RestartCount     int       `json:"restart_count"`
-	Changes          []Change  `json:"changes,omitempty"`
+	SessionID        string         `json:"session_id"`
+	AgentID          string         `json:"agent_id"`
+	ProbeID          string         `json:"probe_id"`
+	MachineID        string         `json:"machine_id"`
+	MachineName      string         `json:"machine_name"`
+	Alias            string         `json:"alias"`
+	AgentType        string         `json:"agent_type"`
+	ProcessID        int            `json:"process_id"`
+	OS               string         `json:"os"`
+	User             string         `json:"user"`
+	IP               string         `json:"ip"`
+	DeclaredIPs      []string       `json:"declared_ips,omitempty"`
+	ObservedIPs      []string       `json:"observed_ips,omitempty"`
+	ConnectionIP     string         `json:"connection_ip,omitempty"`
+	Model            string         `json:"model"`
+	Provider         string         `json:"provider"`
+	DeclaredModel    string         `json:"declared_model,omitempty"`
+	ObservedModel    string         `json:"observed_model,omitempty"`
+	DeclaredProvider string         `json:"declared_provider,omitempty"`
+	ObservedProvider string         `json:"observed_provider,omitempty"`
+	Status           string         `json:"status"`
+	Isolation        string         `json:"isolation"`
+	ProtectionMode   ProtectionMode `json:"protection_mode"`
+	SessionIDs       []string       `json:"session_ids,omitempty"`
+	RegisteredAt     time.Time      `json:"registered_at"`
+	LastHeartbeat    time.Time      `json:"last_heartbeat"`
+	LastActivity     time.Time      `json:"last_activity"`
+	StateChangedAt   time.Time      `json:"state_changed_at,omitempty"`
+	StateChangedBy   string         `json:"state_changed_by,omitempty"`
+	RestartCount     int            `json:"restart_count"`
+	Changes          []Change       `json:"changes,omitempty"`
 }
 
 type Change struct {
@@ -296,17 +299,23 @@ func (r *Registry) Heartbeat(agentID, ip string, observedIPs []string, model, pr
 		v.IP = ip
 	}
 	v.ObservedIPs = uniqueIPs(append(v.ObservedIPs, observedIPs...))
-	if model != "" {
+	// Heartbeat is the authoritative liveness+model signal: a heartbeat without
+	// a model means the agent has no model to report (e.g. direct-to-vendor
+	// agents like Codex ChatGPT login) — clear stale model/provider so the
+	// console does not show a model the agent is not actually using.
+	if v.Model != model || v.Provider != provider {
+		v.Changes = append(v.Changes, Change{At: now, Field: "model", From: v.Model, To: model, Source: "heartbeat"})
+		v.Model = model
 		v.DeclaredModel = model
-		if v.ObservedModel == "" && v.Model != model {
-			v.Changes = append(v.Changes, Change{At: now, Field: "model", From: v.Model, To: model, Source: "heartbeat"})
-			v.Model = model
+		if v.ObservedModel != "" && model == "" {
+			v.ObservedModel = ""
 		}
 	}
-	if provider != "" {
+	if v.Provider != provider {
+		v.Provider = provider
 		v.DeclaredProvider = provider
-		if v.ObservedProvider == "" {
-			v.Provider = provider
+		if v.ObservedProvider != "" && provider == "" {
+			v.ObservedProvider = ""
 		}
 	}
 	if agentType != "" {
@@ -317,6 +326,29 @@ func (r *Registry) Heartbeat(agentID, ip string, observedIPs []string, model, pr
 	}
 	// Don't set Status here; List/Get compute it from LastActivity/LastHeartbeat
 	// via computeStatus. Stored Status is stale otherwise.
+	r.records[agentID] = v
+	return r.saveLocked()
+}
+
+// UpdateMachine records host metadata observed by the local bridge. It is
+// intentionally separate from the harness heartbeat so a bridge can enrich
+// an event-driven identity without changing model or liveness semantics.
+func (r *Registry) UpdateMachine(agentID, machineName string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	agentID = strings.TrimSpace(agentID)
+	machineName = strings.TrimSpace(machineName)
+	if agentID == "" || machineName == "" {
+		return nil
+	}
+	v, ok := r.records[agentID]
+	if !ok {
+		return nil
+	}
+	if v.MachineName != machineName {
+		v.Changes = append(v.Changes, Change{At: time.Now().UTC(), Field: "machine_name", From: v.MachineName, To: machineName, Source: "bridge"})
+		v.MachineName = machineName
+	}
 	r.records[agentID] = v
 	return r.saveLocked()
 }
@@ -491,9 +523,10 @@ func hasRecentEvent(db *sql.DB, agentID string, now time.Time) bool {
 }
 
 // computeStatus implements the three-state model from DESIGN-V1 §2.8:
-//   active  – real harness activity within 5m (events table within 5m takes precedence)
-//   idle    – no activity but probe heartbeat within 2m (process alive, harness idle)
-//   offline – neither
+//
+//	active  – real harness activity within 5m (events table within 5m takes precedence)
+//	idle    – no activity but probe heartbeat within 2m (process alive, harness idle)
+//	offline – neither
 func (r *Registry) computeStatus(v Record, now time.Time) string {
 	if r != nil && r.db != nil {
 		if hasRecentEvent(r.db, v.AgentID, now) {
@@ -652,4 +685,64 @@ func RemoteIP(remote string) string {
 		return host
 	}
 	return strings.TrimSpace(remote)
+}
+
+func shortID(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])[:12]
+}
+
+// EnsureFromEvent auto-registers an agent the moment telemetry mentions it.
+// This is how bridge/rampart events surface as console cards without a
+// separate register call. Idempotent: existing agents are left untouched.
+func (r *Registry) EnsureFromEvent(agentID, toolID string, ts time.Time) error {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if old, exists := r.records[agentID]; exists {
+		// Backfill: an event-driven record registered before the probe-id
+		// fix has no probe id, so the console filter hides it. Patch it once.
+		if old.ProbeID == "" && old.MachineID == "" {
+			old.ProbeID = "probe-event-" + shortID(agentID)
+			if old.LastHeartbeat.IsZero() {
+				old.LastHeartbeat = ts
+			}
+			old.LastActivity = ts
+			r.records[agentID] = old
+			return r.saveLocked()
+		}
+		// Event-driven records used agent_id as a temporary machine label in
+		// older builds. Do not present that identity placeholder as a hostname.
+		if old.MachineID == "" && old.MachineName == old.AgentID {
+			old.MachineName = ""
+			return r.saveLocked()
+		}
+		return nil
+	}
+	agentType := "custom"
+	switch {
+	case strings.Contains(toolID, "llm."):
+		agentType = "opencode"
+	case agentID == "local-claude-code" || strings.Contains(agentID, "claude"):
+		agentType = "claude_code"
+	case strings.Contains(agentID, "codex"):
+		agentType = "codex"
+	}
+	rec := Record{
+		AgentID:   agentID,
+		AgentType: agentType,
+		// Event-driven agents get a synthetic probe id so the console's
+		// probe-backed filter shows them (they have no real probe yet).
+		ProbeID:       "probe-event-" + shortID(agentID),
+		Isolation:     "active",
+		RegisteredAt:  ts,
+		LastActivity:  ts,
+		LastHeartbeat: ts, // event-driven agents are live the moment they appear
+		SessionIDs:    []string{},
+	}
+	r.records[agentID] = rec
+	return r.saveLocked()
 }

@@ -1,9 +1,13 @@
 package webui
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/dedarek/agent-security-gateway/api"
+	"github.com/dedarek/agent-security-gateway/internal/agentregistry"
 )
 
 var beijing = time.FixedZone("CST", 8*3600)
@@ -13,6 +17,55 @@ func fmtBeijing(t time.Time) string {
 		return ""
 	}
 	return t.In(beijing).Format("2006-01-02 15:04:05")
+}
+
+// apiAgents returns registered agents enriched with observed event statistics.
+func (s *Server) apiAgentMode(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		agentID := r.URL.Query().Get("agent_id")
+		if agentID == "" {
+			http.Error(w, "agent_id required", http.StatusBadRequest)
+			return
+		}
+		mode := s.Agents.ModeOf(agentID)
+		json.NewEncoder(w).Encode(map[string]any{"agent_id": agentID, "mode": mode})
+	case http.MethodPost:
+		var req struct {
+			AgentID string `json:"agent_id"`
+			Mode    string `json:"mode"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		if req.AgentID == "" || !agentregistry.IsValidMode(req.Mode) {
+			http.Error(w, "agent_id + valid mode (normal/quarantine/kill) required", http.StatusBadRequest)
+			return
+		}
+		actor := "operator"
+		rec, err := s.Agents.SetMode(req.AgentID, agentregistry.ProtectionMode(req.Mode), actor)
+		if err != nil {
+			http.Error(w, "set mode failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// audit event
+		if s.Store != nil {
+			s.Store.Write(api.Event{
+				SessionID: "console",
+				Call: api.ToolCall{
+					CallID:    "agent.mode_change",
+					ToolID:    "agent.mode_change",
+					Principal: api.Principal{AgentID: req.AgentID, SessionID: "console"},
+					Arguments: json.RawMessage(`{"mode":"` + req.Mode + `","actor":"` + actor + `"}`),
+				},
+				Decision: api.Decision{Final: api.VerdictAllow, Rationale: "protection mode changed to " + req.Mode},
+			})
+		}
+		json.NewEncoder(w).Encode(map[string]any{"agent_id": rec.AgentID, "mode": rec.ProtectionMode, "changed_by": actor})
+	default:
+		http.Error(w, "GET or POST only", http.StatusMethodNotAllowed)
+	}
 }
 
 // apiAgents returns registered agents enriched with observed event statistics.

@@ -216,6 +216,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/agents/detail", s.Auth.middleware(s.apiAgentDetail))
 	mux.HandleFunc("/api/agents/history", s.Auth.middleware(s.apiAgentHistory))
 	mux.HandleFunc("/api/agents/delete", s.Auth.middleware(s.apiAgentDelete))
+	mux.HandleFunc("/api/agents/mode", s.Auth.middleware(s.apiAgentMode))
 	mux.HandleFunc("/api/agents/action", s.Auth.middleware(s.apiAgentAction))
 	mux.HandleFunc("/api/agents/register", s.apiAgentRegister)
 	mux.HandleFunc("/api/agents/heartbeat", s.apiAgentHeartbeat)
