@@ -194,13 +194,17 @@ func (r *reporter) ship(batch []byte) error {
 	return nil
 }
 
-// hubCheck asks the central gateway for a verdict on a sensitive action.
-func (r *reporter) hubCheck(ctx context.Context, sessionID, toolID string, args []byte) (string, error) {
-	body, _ := json.Marshal(map[string]any{"session": sessionID, "tool": toolID, "arguments": jsonRaw(args)})
+// hubCheck asks the central gateway for a verdict on a tool call (Hook PEP).
+func (r *reporter) hubCheck(ctx context.Context, sessionID, toolID string, args []byte) (verdict, reason string, err error) {
+	body, _ := json.Marshal(map[string]any{
+		"session_id": sessionID,
+		"tool_name":  toolID,
+		"tool_input": jsonRaw(args),
+	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		strings.TrimSuffix(r.hubURL, "/")+"/api/hub-check", bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if r.key != "" {
@@ -208,17 +212,20 @@ func (r *reporter) hubCheck(ctx context.Context, sessionID, toolID string, args 
 	}
 	resp, err := r.client.Do(req)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer resp.Body.Close()
 	var out struct {
-		Verdict string `json:"verdict"`
-		Reason  string `json:"reason"`
+		Decision string `json:"decision"`
+		Reason   string `json:"reason"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return out.Verdict + "|" + out.Reason, nil
+	if resp.StatusCode == http.StatusForbidden || out.Decision == "block" {
+		return "BLOCK", out.Reason, nil
+	}
+	return "ALLOW", out.Reason, nil
 }
 
 func appendFile(path string, b []byte) error {

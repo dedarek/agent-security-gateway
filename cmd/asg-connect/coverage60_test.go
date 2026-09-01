@@ -610,11 +610,11 @@ func TestAnthropicSSE(t *testing.T) {
 func TestHubCheck(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"verdict":"ALLOW","reason":"ok"}`))
+		w.Write([]byte(`{"decision":"allow","reason":"ok"}`))
 	}))
 	defer srv.Close()
 	rep := newReporter(srv.URL, "k", "", "t", "a")
-	v, err := rep.hubCheck(context.Background(), "sess", "tool", []byte(`{}`))
+	v, _, err := rep.hubCheck(context.Background(), "sess", "tool", []byte(`{}`))
 	if err != nil {
 		t.Fatalf("hubCheck: %v", err)
 	}

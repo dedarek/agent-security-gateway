@@ -211,12 +211,14 @@ func TestHookHTTPHandler(t *testing.T) {
 	cfg := &ProbeConfig{HubURL: "http://127.0.0.1:0", AgentID: "test-agent"}
 	rep := newReporter("http://127.0.0.1:0", "", "", "t", "a")
 	h := hookHTTPHandler(cfg, rep)
-	req := httptest.NewRequest(http.MethodPost, "/api/hook-check", strings.NewReader(`{"tool":"Bash"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/hook-check", strings.NewReader(`{"tool_name":"Bash","tool_input":{"command":"ls"}}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h(rec, req)
+	// Hub unreachable -> fail-open ALLOW (local rules passed); the hub error
+	// is recorded in the report but must not block the tool.
 	if rec.Code != 200 {
-		t.Fatalf("hook handler status=%d", rec.Code)
+		t.Fatalf("hook handler status=%d (want fail-open 200 when hub down)", rec.Code)
 	}
 }
 

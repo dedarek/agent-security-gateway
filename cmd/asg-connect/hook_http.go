@@ -29,19 +29,33 @@ func hookHTTPHandler(cfg *ProbeConfig, rep *reporter) http.HandlerFunc {
 			sessionID = "hook-" + cfg.TenantName
 		}
 
+		// Local fast-path rules first.
 		verdict, reason := localVerdict(payload.ToolName, payload.ToolInput)
-		rep.ReportTool(sessionID, "hook."+payload.ToolName, payload.ToolInput, verdict, reason)
-
-		w.Header().Set("Content-Type", "application/json")
 		if verdict == "BLOCK" {
+			rep.ReportTool(sessionID, "hook."+payload.ToolName, payload.ToolInput, verdict, reason)
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
-			json.NewEncoder(w).Encode(map[string]any{
-				"decision": "block",
-				"reason":   reason,
-			})
-		} else {
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]any{"decision": "allow"})
+			json.NewEncoder(w).Encode(map[string]any{"decision": "block", "reason": reason})
+			return
 		}
+
+		// Defer to the hub decision engine (Cedar / taint / DLP) for the
+		// real enforcement verdict — this is the Hook PEP data plane.
+		// Fail-open: if the hub is unreachable, local rules already passed,
+		// so allow (availability > enforcement); a BLOCK from the hub still
+		// stops the tool.
+		hubVerdict, hubReason, err := rep.hubCheck(r.Context(), sessionID, payload.ToolName, payload.ToolInput)
+		if err == nil && hubVerdict == "BLOCK" {
+			rep.ReportTool(sessionID, "hook."+payload.ToolName, payload.ToolInput, "BLOCK", hubReason)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]any{"decision": "block", "reason": hubReason})
+			return
+		}
+
+		rep.ReportTool(sessionID, "hook."+payload.ToolName, payload.ToolInput, "ALLOW", "")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{"decision": "allow"})
 	}
 }
