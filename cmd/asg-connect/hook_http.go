@@ -15,9 +15,12 @@ func hookHTTPHandler(cfg *ProbeConfig, rep *reporter) http.HandlerFunc {
 			return
 		}
 		var payload struct {
-			SessionID string          `json:"session_id"`
-			ToolName  string          `json:"tool_name"`
-			ToolInput json.RawMessage `json:"tool_input"`
+			SessionID     string          `json:"session_id"`
+			AgentID       string          `json:"agent_id"`
+			ToolName      string          `json:"tool_name"`
+			ToolInput     json.RawMessage `json:"tool_input"`
+			ToolResponse  json.RawMessage `json:"tool_response"`
+			HookEventName string          `json:"hook_event_name"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			http.Error(w, err.Error(), 400)
@@ -27,6 +30,17 @@ func hookHTTPHandler(cfg *ProbeConfig, rep *reporter) http.HandlerFunc {
 		sessionID := payload.SessionID
 		if sessionID == "" {
 			sessionID = "hook-" + cfg.TenantName
+		}
+
+		// PostToolUse: the tool already executed. No decision — just observe
+		// the real result so taint/DataAccess reflect actual execution
+		// (PreToolUse only granted permission; PostToolUse confirms reality).
+		if payload.HookEventName == "PostToolUse" {
+			_ = rep.hubObserve(sessionID, cfg.AgentID, payload.ToolName, payload.ToolInput, payload.ToolResponse)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]any{"decision": "observe"})
+			return
 		}
 
 		// Local fast-path rules first.

@@ -23,13 +23,42 @@ func (s *Server) apiHubCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var payload struct {
-		SessionID string          `json:"session_id"`
-		AgentID   string          `json:"agent_id"`
-		ToolName  string          `json:"tool_name"`
-		ToolInput json.RawMessage `json:"tool_input"`
+		SessionID     string          `json:"session_id"`
+		AgentID       string          `json:"agent_id"`
+		ToolName      string          `json:"tool_name"`
+		ToolInput     json.RawMessage `json:"tool_input"`
+		ToolResponse  json.RawMessage `json:"tool_response"`
+		HookEventName string          `json:"hook_event_name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// PostToolUse (phase=post): the tool already executed. No decision —
+	// observe the real result so taint/DataAccess reflect actual execution.
+	if r.URL.Query().Get("phase") == "post" || payload.HookEventName == "PostToolUse" {
+		if s.Engine != nil {
+			wrapped, _ := json.Marshal(map[string]any{
+				"session_id":    payload.SessionID,
+				"tool_name":     payload.ToolName,
+				"tool_input":    payload.ToolInput,
+				"tool_response": payload.ToolResponse,
+			})
+			s.Engine.ObserveHook(payload.SessionID, payload.ToolName, wrapped)
+		}
+		if s.DataAccess != nil {
+			wrapped, _ := json.Marshal(map[string]any{
+				"session_id":    payload.SessionID,
+				"tool_name":     payload.ToolName,
+				"tool_input":    payload.ToolInput,
+				"tool_response": payload.ToolResponse,
+			})
+			s.DataAccess.ObserveHook(payload.SessionID, "hook-"+payload.ToolName, payload.ToolName, wrapped, "ALLOW")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{"decision": "observe"})
 		return
 	}
 
@@ -104,10 +133,12 @@ func (s *Server) apiHubCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) reportHookTool(payload struct {
-	SessionID string          `json:"session_id"`
-	AgentID   string          `json:"agent_id"`
-	ToolName  string          `json:"tool_name"`
-	ToolInput json.RawMessage `json:"tool_input"`
+	SessionID     string          `json:"session_id"`
+	AgentID       string          `json:"agent_id"`
+	ToolName      string          `json:"tool_name"`
+	ToolInput     json.RawMessage `json:"tool_input"`
+	ToolResponse  json.RawMessage `json:"tool_response"`
+	HookEventName string          `json:"hook_event_name"`
 }, verdict, reason string) {
 	// Data lineage: record the data-flow hop for this tool call.
 	if s.DataAccess != nil {

@@ -194,6 +194,35 @@ func (r *reporter) ship(batch []byte) error {
 	return nil
 }
 
+// hubObserve reports a PostToolUse execution result to the hub for
+// observation (taint/DataAccess) without any decision — the tool already ran.
+func (r *reporter) hubObserve(sessionID, agentID, toolID string, input, response []byte) error {
+	body, _ := json.Marshal(map[string]any{
+		"session_id":      sessionID,
+		"agent_id":        agentID,
+		"tool_name":       toolID,
+		"tool_input":      jsonRaw(input),
+		"tool_response":   jsonRaw(response),
+		"hook_event_name": "PostToolUse",
+	})
+	req, err := http.NewRequest(http.MethodPost,
+		strings.TrimSuffix(r.hubURL, "/")+"/api/hub-check?phase=post", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if r.key != "" {
+		req.Header.Set("Authorization", "Bearer "+r.key)
+	}
+	client := &http.Client{Timeout: 8 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
 // hubCheck asks the central gateway for a verdict on a tool call (Hook PEP).
 func (r *reporter) hubCheck(ctx context.Context, sessionID, agentID, toolID string, args []byte) (verdict, reason string, err error) {
 	body, _ := json.Marshal(map[string]any{
