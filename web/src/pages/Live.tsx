@@ -17,6 +17,7 @@ import { Trend } from '../components/charts/Trend'
 import { EventStream } from '../components/EventStream'
 import { CAPABILITY_GROUPS } from '../lib/capabilities'
 import ProtectionStatus from '../components/ProtectionStatus'
+import ApprovalQueue from '../components/ApprovalQueue'
 
 const ACTIONS = ['allow', 'confirm', 'block'] as const
 
@@ -48,6 +49,7 @@ export default function Live({ streamLive = true }: { streamLive?: boolean }) {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto' }}>
       <div style={{ padding: '24px 28px 0' }}>
         <ProtectionStatus />
+        <ApprovalQueue />
         <div className="row-between" style={{ marginBottom: 20, marginTop: 16 }}>
           <div>
             <h1 className="h-page" style={{ fontSize: 22, fontWeight: 600 }}>安全概览</h1>

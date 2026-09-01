@@ -59,6 +59,7 @@ export const api = {
   ontoEvidence: (eventId: string) => get<any>(`/api/onto/evidence?event=${encodeURIComponent(eventId)}`),
   ontoGraph: () => get<any>('/api/onto/graph'),
   approvals: () => get<any[]>('/api/approvals'),
+  approvalDecide: (id: string, approve: boolean) => post<any>('/api/approvals', { id, approve }),
   suggestions: () => get<any[]>('/api/suggestions'),
   trajectory: (session: string) => get<any>(`/api/trajectory?session=${encodeURIComponent(session)}`),
   kgPath: (source: string, target: string) => get<any>(`/api/kg/graph/path?source=${encodeURIComponent(source)}&target=${encodeURIComponent(target)}`),
