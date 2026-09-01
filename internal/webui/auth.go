@@ -134,7 +134,24 @@ func (a *uiAuth) isLocalOnly(r *http.Request) bool {
 	if err != nil {
 		host = r.RemoteAddr
 	}
-	return host == "127.0.0.1" || host == "::1" || host == "localhost"
+	return host == "127.0.0.1" || host == "::1" || host == "localhost" || isTrustedLANHost(host)
+}
+
+// isTrustedLANHost reports whether the remote host is the operator's own
+// machine on the LAN (single-tenant test deployments). The gateway WSL2
+// address and the private subnet the operator browses from are trusted so
+// the console works without a login when reached via the machine IP.
+func isTrustedLANHost(host string) bool {
+	trusted := os.Getenv("ASG_TRUSTED_HOSTS")
+	if trusted == "" {
+		return false
+	}
+	for _, h := range strings.Split(trusted, ",") {
+		if strings.TrimSpace(h) == host {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) uiLogin(w http.ResponseWriter, r *http.Request) {

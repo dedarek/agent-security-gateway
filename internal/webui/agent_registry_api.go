@@ -62,6 +62,7 @@ func (s *Server) apiAgentHeartbeat(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		AgentID     string    `json:"agent_id"`
 		IP          string    `json:"ip"`
+		MachineName string    `json:"machine_name"`
 		ObservedIPs []string  `json:"observed_ips"`
 		Model       string    `json:"model"`
 		Provider    string    `json:"provider"`
@@ -73,7 +74,20 @@ func (s *Server) apiAgentHeartbeat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agent_id is required", http.StatusBadRequest)
 		return
 	}
+	// A heartbeat from the bridge is still useful identity evidence even when
+	// the harness cannot report its own address (for example, Codex ChatGPT
+	// login). Preserve the actual HTTP peer rather than leaving IP blank.
+	if in.IP == "" {
+		in.IP = agentregistry.RemoteIP(r.RemoteAddr)
+	}
+	if len(in.ObservedIPs) == 0 && in.IP != "" {
+		in.ObservedIPs = []string{in.IP}
+	}
 	if err := s.Agents.Heartbeat(in.AgentID, in.IP, in.ObservedIPs, in.Model, in.Provider, in.AgentType, in.Alias, in.Activity); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := s.Agents.UpdateMachine(in.AgentID, in.MachineName); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

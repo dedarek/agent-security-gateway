@@ -65,11 +65,12 @@ func (s *Server) handlePoliciesList(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePoliciesUpsert(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		AgentID *string `json:"agent_id"`
-		Axis    string  `json:"axis"`
-		RuleID  string  `json:"rule_id"`
-		Action  string  `json:"action"`
-		Enabled *bool   `json:"enabled"`
+		AgentID  *string         `json:"agent_id"`
+		Axis     string          `json:"axis"`
+		RuleID   string          `json:"rule_id"`
+		Action   string          `json:"action"`
+		Enabled  *bool           `json:"enabled"`
+		Selector json.RawMessage `json:"selector"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
@@ -77,6 +78,10 @@ func (s *Server) handlePoliciesUpsert(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(req.RuleID) == "" {
 		http.Error(w, "rule_id is required", http.StatusBadRequest)
+		return
+	}
+	if len(req.Selector) > 0 && !json.Valid(req.Selector) {
+		http.Error(w, "selector must be valid JSON", http.StatusBadRequest)
 		return
 	}
 	if strings.TrimSpace(req.Axis) == "" {
@@ -97,7 +102,7 @@ func (s *Server) handlePoliciesUpsert(w http.ResponseWriter, r *http.Request) {
 			agentID = &v
 		}
 	}
-	if err := db.UpsertPolicy(policiesDB, agentID, req.Axis, req.RuleID, req.Action, enabled); err != nil {
+	if err := db.UpsertPolicyWithSelector(policiesDB, agentID, req.Axis, req.RuleID, req.Action, enabled, req.Selector); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
