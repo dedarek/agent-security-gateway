@@ -4,6 +4,7 @@ import { api } from '../lib/api'
 import { VerdictBadge } from '../components/VerdictBadge'
 import { EmptyState } from '../components/EmptyState'
 import { SkeletonRows } from '../components/Skeleton'
+import KGGraph from '../components/KGGraph'
 
 type Tab = 'graph' | 'findings' | 'sessions'
 
@@ -36,7 +37,8 @@ function TabBtn({ id, cur, set, label }: { id: Tab; cur: Tab; set: (t: Tab) => v
   return <button className={`tab ${cur === id ? 'tab-active' : ''}`} onClick={() => set(id)}>{label}</button>
 }
 
-/** Semantica 大图谱改跳转新窗口，不再 iframe 嵌入（iframe+FA2 worker 会卡死）。 */
+/** 本体图谱：内嵌 KGGraph（cytoscape 渲染 /api/onto/graph 统一本体），
+ *  同时保留 Semantica Explorer 新窗口入口。 */
 function GraphLaunch() {
   const { data: status } = useQuery({ queryKey: ['status'], queryFn: api.status, refetchInterval: 10000 })
   const kg = status?.kg || {}
@@ -44,26 +46,24 @@ function GraphLaunch() {
   const n = kg.node_count ?? kg.entities ?? 0
   return (
     <div style={{ padding: 22 }}>
-      <div className="card card-pad">
-        <div className="h-sec" style={{ marginBottom: 6 }}>知识图谱 · Semantica</div>
-        <div className="small dim" style={{ marginBottom: 14 }}>
-          完整图谱在 Semantica Explorer 中打开（独立窗口，Sigma WebGL + ForceAtlas2 连续布局，不占用控制台页面）。
-          控制台内不再嵌入，避免 iframe 卡死。
+      <div className="card card-pad" style={{ marginBottom: 12 }}>
+        <div className="row-between" style={{ marginBottom: 10 }}>
+          <div>
+            <div className="h-sec">知识图谱 · Semantica</div>
+            <div className="row" style={{ gap: 10, marginTop: 6 }}>
+              <span className={`badge ${ready ? 'badge-allow' : 'badge-confirm'}`}>{ready ? '● graph ready' : '◐ warming up'}</span>
+              <span className="small dim">{n} 节点 · 本体导出 / 行为事件</span>
+            </div>
+          </div>
+          <a className="btn" href="/explorer/" target="_blank" rel="noreferrer">在 Semantica 中打开 →</a>
         </div>
-        <div className="row" style={{ gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
-          <span className={`badge ${ready ? 'badge-allow' : 'badge-confirm'}`}>{ready ? 'graph ready' : 'warming up'}</span>
-          <span className="small dim">{n} 节点 · 来源：本体导出 / 行为事件</span>
-        </div>
-        <div className="row" style={{ gap: 10 }}>
-          <a className="btn btn-primary" href="/explorer/" target="_blank" rel="noreferrer">在 Semantica 中打开 →</a>
-          <span className="small dim">新窗口打开 /explorer/（经网关代理，无需额外端口）</span>
-        </div>
-        <div className="small dim" style={{ marginTop: 12 }}>
-          直连地址：<a href="http://127.0.0.1:8091/" target="_blank" rel="noreferrer">127.0.0.1:8091</a>（仅本机）
+        <div style={{ height: 480, borderRadius: 8, overflow: 'hidden', border: '1px solid var(--line)' }}>
+          <KGGraph focus="" />
         </div>
       </div>
-      <div className="small dim" style={{ marginTop: 12 }}>
-        图谱数据来自 <code>/api/onto/graph</code> 统一本体；节点类型与 taint 边在 Semantica 中已按本体配色与形状区分。
+      <div className="small dim">
+        图谱数据来自 <code>/api/onto/graph</code> 统一本体（B 污点血缘 · D 证据链 · E 会话叙事）；
+        节点按类型配色（Agent 橙 / Tool 蓝 / Event 灰 / ExternalActor 红），taint 边高亮。
       </div>
     </div>
   )

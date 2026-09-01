@@ -270,6 +270,14 @@ func serveCmd(args []string) {
 		if kgBridgeInst != nil && (len(ents) > 0 || len(rels) > 0) {
 			_ = kgBridgeInst.Ingest(ents, rels)
 		}
+		// Semantic index: keep /api/kg/search fresh for live events too
+		// (not just the startup replay). Non-fatal on failure.
+		if kgBridgeInst != nil {
+			_ = kgBridgeInst.IndexEvents(
+				[]string{ev.Call.ToolID + " " + ev.Decision.Final.String() + " " + ev.Decision.Rationale},
+				[]string{ev.Call.CallID},
+			)
+		}
 	})
 
 	// Semantica Explorer proxied into the console (unified interface).
