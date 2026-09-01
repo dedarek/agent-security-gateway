@@ -180,7 +180,21 @@ func (p *llmProxy) handleAnthropicBridge(w http.ResponseWriter, r *http.Request)
 
 	// If the client requested streaming, synthesize Anthropic SSE events.
 	if req.Stream {
-		anthropicSSE(w, upstreamModel, content, toolUse)
+		// Pass the RAW function arguments string so the SSE synth can emit
+		// them unescaped. Marshal here would double-escape and break
+		// Claude Code's partial_json parser.
+		rawToolUses := make([]map[string]any, 0, len(toolUse))
+		for _, tu := range toolUse {
+			raw := make(map[string]any, len(tu))
+			for k, v := range tu {
+				raw[k] = v
+			}
+			if in, ok := raw["input"].(json.RawMessage); ok {
+				raw["input"] = string(in)
+			}
+			rawToolUses = append(rawToolUses, raw)
+		}
+		anthropicSSE(w, upstreamModel, content, rawToolUses)
 		return
 	}
 

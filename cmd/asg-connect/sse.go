@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 // anthropicSSE synthesizes an Anthropic-format SSE stream from a complete
@@ -69,7 +70,22 @@ func anthropicSSE(w http.ResponseWriter, model, content string, toolUses []map[s
 		idx := 1 + ti
 		name, _ := tu["name"].(string)
 		input := tu["input"]
-		inputJSON, _ := json.Marshal(input)
+		// input is json.RawMessage from the upstream tool_calls — marshal
+		// would DOUBLE-escape it ("{\"command\":\"ls\"}" as a quoted string),
+		// which breaks Claude Code's partial_json parser ("Tool use
+		// interrupted"). Use the raw bytes when possible.
+		var inputJSON []byte
+		switch v := input.(type) {
+		case json.RawMessage:
+			// upstream arguments may be "{\"command\":\"ls\"}" (string with
+			// quotes) or {"command":"ls"} (object). Strip one layer of
+			// surrounding quotes so partial_json is the bare JSON object.
+			inputJSON = unquoteJSON(v)
+		case string:
+			inputJSON = unquoteJSON([]byte(v))
+		default:
+			inputJSON, _ = json.Marshal(input)
+		}
 		send("content_block_start", map[string]any{
 			"index":         idx,
 			"content_block": map[string]any{"type": "tool_use", "id": name, "name": name, "input": map[string]any{}},
@@ -96,4 +112,19 @@ func anthropicSSE(w http.ResponseWriter, model, content string, toolUses []map[s
 	seq++
 
 	send("message_stop", map[string]any{})
+}
+
+// unquoteJSON strips one layer of surrounding double quotes if the bytes are
+// a JSON string literal. Upstream tool_calls[].function.arguments is often a
+// JSON-encoded STRING ("{\"command\":\"ls\"}") rather than a bare object; the
+// Anthropic partial_json protocol requires the bare object text.
+func unquoteJSON(b []byte) []byte {
+	s := strings.TrimSpace(string(b))
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		var out string
+		if err := json.Unmarshal(b, &out); err == nil {
+			return []byte(out)
+		}
+	}
+	return b
 }
