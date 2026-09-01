@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"regexp"
 	"strings"
 
@@ -265,4 +266,36 @@ func argValues(raw []byte) []string {
 		return extractTokens(string(raw))
 	}
 	return flattenValues(m)
+}
+
+// isExternalDestination reports whether a URL points outside the local trust
+// zone: public hosts, non-private IPs, anything not on loopback/private/
+// link-local ranges. Internal corporate domains (.internal/.corp/.local) and
+// private IPs are NOT external.
+func isExternalDestination(raw string) bool {
+	u := strings.TrimSpace(strings.ToLower(raw))
+	if u == "" {
+		return false
+	}
+	if i := strings.Index(u, "://"); i >= 0 {
+		u = u[i+3:]
+	}
+	if i := strings.IndexAny(u, "/?#"); i >= 0 {
+		u = u[:i]
+	}
+	if i := strings.LastIndex(u, ":"); i >= 0 && !strings.Contains(u[i:], "]") {
+		u = u[:i]
+	}
+	if u == "" {
+		return false
+	}
+	if ip := net.ParseIP(u); ip != nil {
+		return !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsUnspecified()
+	}
+	if strings.HasSuffix(u, ".local") || strings.HasSuffix(u, ".internal") || strings.HasSuffix(u, ".corp") ||
+		strings.HasSuffix(u, ".lan") || strings.HasSuffix(u, ".localhost") ||
+		strings.Contains(u, ".internal.") || u == "localhost" {
+		return false
+	}
+	return strings.Contains(u, ".")
 }

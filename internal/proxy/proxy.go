@@ -73,6 +73,9 @@ func (g *Gateway) Handle(ctx context.Context, c *api.ToolCall) (*api.ToolResult,
 	// ---- PRE ----
 	pre := g.Registry.EvaluatePre(ctx, c)
 	if pre.Final == api.VerdictBlock {
+		if g.DataAccess != nil {
+			g.DataAccess.ObserveProxy(c, pre.Final.String())
+		}
 		g.record(c, nil, pre)
 		return nil, pre, nil
 	}

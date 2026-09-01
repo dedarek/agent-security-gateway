@@ -58,7 +58,36 @@ func (r *DataAccessRecorder) ObserveProxy(c *api.ToolCall, verdict string) {
 		TrustZoneSrc: "local",
 	}
 	da.Operation, da.Source, da.Destination = classifyTool(c.ToolID, c.Arguments)
+	// M2: same classification as the hook path (data class + trust zone + taint)
+	r.enrich(&da, c.Principal.SessionID)
 	_ = db.UpsertDataAccess(r.database, da)
+}
+
+// enrich applies M2 context-aware DLP metadata to a DataAccess hop:
+// data class (credential/pii) + destination trust zone + taint tags from the
+// session's provenance.
+func (r *DataAccessRecorder) enrich(da *api.DataAccess, sessionID string) {
+	da.DataClass = classifyDataClass(da.Source, da.Destination, nil)
+	if da.Operation == "transmit" && isExternalDestination(da.Destination) {
+		da.TrustZoneDst = "external"
+	} else {
+		da.TrustZoneDst = "local"
+	}
+	if r.taint != nil {
+		if marks := r.taint.store.Taints(sessionID); len(marks) > 0 {
+			for _, m := range marks {
+				da.TaintTags = append(da.TaintTags, m.Tokens...)
+			}
+			if da.DataClass == "" {
+				for _, m := range marks {
+					if c := classifyDataClass(m.Source, m.Content, []byte(m.Content)); c != "" {
+						da.DataClass = c
+						break
+					}
+				}
+			}
+		}
+	}
 }
 
 func (r *DataAccessRecorder) build(sessionID, toolID string, payload []byte, verdict string) api.DataAccess {
@@ -76,15 +105,56 @@ func (r *DataAccessRecorder) build(sessionID, toolID string, payload []byte, ver
 	// file_path/url). tool_input is the hook's arguments envelope.
 	argsJSON := mustJSONRaw(input)
 	da.Operation, da.Source, da.Destination = classifyTool(toolID, argsJSON)
-	// taint tags: if this tool is a sink and session has taints, tag it
+	// M2 context-aware DLP: classify the data + trust zone so the console can
+	// show "credential from .env -> transmit to external -> BLOCK".
+	da.DataClass = classifyDataClass(da.Source, da.Destination, argsJSON)
+	if da.Operation == "transmit" && isExternalDestination(da.Destination) {
+		da.TrustZoneDst = "external"
+	} else {
+		da.TrustZoneDst = "local"
+	}
+	// taint tags: if this tool is a sink and session has taints, tag it.
+	// The DATA CLASS also inherits from taint provenance: a transmit that
+	// carries a tainted credential is itself a credential flow.
 	if r.taint != nil {
 		if marks := r.taint.store.Taints(sessionID); len(marks) > 0 {
 			for _, m := range marks {
 				da.TaintTags = append(da.TaintTags, m.Tokens...)
 			}
+			if da.DataClass == "" {
+				for _, m := range marks {
+					if classifyDataClass(m.Source, m.Content, []byte(m.Content)) != "" {
+						da.DataClass = classifyDataClass(m.Source, m.Content, []byte(m.Content))
+						break
+					}
+				}
+			}
 		}
 	}
 	return da
+}
+
+// classifyDataClass labels the data touched by a hop: credential (keys,
+// tokens, .env, aws/ssh paths), pii (emails/phones), or empty (general).
+func classifyDataClass(source, destination string, args []byte) string {
+	hay := strings.ToLower(source + " " + destination + " " + string(args))
+	switch {
+	case containsAny(hay, ".env", "api_key", "apikey", "secret", "token", "password", "credential", "aws/", ".ssh", "id_rsa", "authorization", "bearer"):
+		return "credential"
+	case containsAny(hay, "@", "email", "phone", "id_card", "身份证", "手机号"):
+		return "pii"
+	default:
+		return ""
+	}
+}
+
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 func mustJSONRaw(v any) []byte {
