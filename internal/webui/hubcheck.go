@@ -133,6 +133,11 @@ func (s *Server) reportHookTool(payload struct {
 			Decision: api.Decision{Final: verdictToEnum(verdict), Rationale: reason},
 		}
 		s.Store.Write(ev)
+		// Live KG ingest: hook-path events flow into the security graph so
+		// the lineage view reflects activity within the request.
+		if s.kgLive != nil {
+			s.kgLive(ev)
+		}
 	}
 }
 
