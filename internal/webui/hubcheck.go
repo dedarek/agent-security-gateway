@@ -91,7 +91,14 @@ func (s *Server) reportHookTool(payload struct {
 }, verdict, reason string) {
 	// Data lineage: record the data-flow hop for this tool call.
 	if s.DataAccess != nil {
-		s.DataAccess.ObserveHook(payload.SessionID, "hook-"+payload.ToolName, payload.ToolName, payload.ToolInput, verdict)
+		// Re-wrap tool_input so the recorder's hookParts can extract
+		// source/destination/trust zone correctly.
+		wrapped, _ := json.Marshal(map[string]any{
+			"session_id": payload.SessionID,
+			"tool_name":  payload.ToolName,
+			"tool_input": payload.ToolInput,
+		})
+		s.DataAccess.ObserveHook(payload.SessionID, "hook-"+payload.ToolName, payload.ToolName, wrapped, verdict)
 	}
 	// Audit event (agent registry / store).
 	if s.Store != nil {
@@ -186,7 +193,8 @@ func isExternalSinkTool(tool string, input json.RawMessage) bool {
 	isSinkTool := strings.Contains(name, "curl") || strings.Contains(name, "wget") ||
 		strings.Contains(name, "http") || strings.Contains(name, "scp") ||
 		strings.Contains(name, "ssh") || strings.Contains(name, "nc") ||
-		strings.Contains(name, "send_email") || strings.Contains(name, "post")
+		strings.Contains(name, "send_email") || strings.Contains(name, "post") ||
+		strings.Contains(name, "fetch") || strings.Contains(name, "web")
 	if !isSinkTool {
 		return false
 	}
