@@ -7,10 +7,10 @@ import { VerdictBadge } from './VerdictBadge'
 import { Skeleton } from './Skeleton'
 
 const TYPE_COLOR: Record<string, string> = {
-  Agent: '#f5a623',
-  Tool: '#4a9bd4',
-  Event: '#5f7183',
-  ExternalActor: '#ff5f56',
+  Agent: '#e8920c',   // 深橙（浅底高对比）
+  Tool: '#1f7fd6',    // 深蓝
+  Event: '#3d4d5c',   // 深灰蓝
+  ExternalActor: '#c0392b', // 深红
 }
 const TYPE_SHAPE: Record<string, string> = {
   Agent: 'ellipse',
@@ -45,16 +45,16 @@ export default function KGGraph({ focus }: { focus?: string }) {
 
   const render = useCallback(async (m: GraphMode) => {
     if (!containerRef.current) return
-    setLoading(true)
+    const first = !rawRef.current
+    if (first) setLoading(true)
     setErr(null)
     try {
-      if (!rawRef.current) {
-        const [nr, er] = await Promise.all([api.kgNodes(), api.kgEdges()])
-        const n = Array.isArray((nr as any)?.nodes) ? (nr as any).nodes : Array.isArray(nr) ? nr : []
-        const e = Array.isArray((er as any)?.edges) ? (er as any).edges : Array.isArray(er) ? er : []
-        rawRef.current = { nodes: n, edges: e }
-        nodeById.current = new Map(n.map((x: KGNode) => [x.id, x]))
-      }
+      // 每次渲染都重拉数据（动态刷新），不缓存 rawRef
+      const [nr, er] = await Promise.all([api.kgNodes(), api.kgEdges()])
+      const n = Array.isArray((nr as any)?.nodes) ? (nr as any).nodes : Array.isArray(nr) ? nr : []
+      const e = Array.isArray((er as any)?.edges) ? (er as any).edges : Array.isArray(er) ? er : []
+      rawRef.current = { nodes: n, edges: e }
+      nodeById.current = new Map(n.map((x: KGNode) => [x.id, x]))
       const { nodes, edges, stats } = buildRiskSubgraph(rawRef.current.nodes, rawRef.current.edges, m)
       setStats({ shown: stats.shown, rawNodes: stats.rawNodes, omitted: stats.omitted, edges: edges.length })
 
@@ -100,10 +100,11 @@ export default function KGGraph({ focus }: { focus?: string }) {
         } as any,
         style: [
           { selector: 'node', style: {
-            'background-color': 'data(color)', 'label': 'data(label)', 'color': '#e6ebf2',
+            'background-color': 'data(color)', 'label': 'data(label)', 'color': '#1a2530',
             'font-size': 8, 'text-valign': 'bottom', 'text-halign': 'center', 'text-margin-y': 4,
             'text-wrap': 'wrap', 'text-max-width': 90, 'width': 'data(size)', 'height': 'data(size)',
-            'border-width': 2, 'border-color': '#0b0f14', 'shape': 'data(shape)', 'overlay-opacity': 0,
+            'border-width': 2, 'border-color': '#ffffff', 'shape': 'data(shape)', 'overlay-opacity': 0,
+            'text-outline-width': 3, 'text-outline-color': '#ffffff',
           } as any },
           { selector: 'node[isBlock]', style: {
             'border-width': 3, 'border-color': '#ff5f56',
@@ -237,6 +238,13 @@ export default function KGGraph({ focus }: { focus?: string }) {
     setTracing(false)
   }
 
+  // 自动刷新：每 30s 重拉图谱数据并重排（动态高帧）
+  useEffect(() => {
+    render(mode)
+    const t = setInterval(() => render(mode), 30000)
+    return () => clearInterval(t)
+  }, [mode, render])
+
   return (
     <div style={{ padding: '16px 22px', display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <div className="row-between" style={{ marginBottom: 10, flexWrap: 'wrap', gap: 10 }}>
@@ -254,8 +262,8 @@ export default function KGGraph({ focus }: { focus?: string }) {
           <button className="btn" onClick={handleReset}>重置高亮</button>
           <button className="btn" onClick={() => cyRef.current?.fit(undefined, 36)}>居中适配</button>
           <span className="row small dim" style={{ gap: 10 }}>
-            <Legend c="#f5a623" t="Agent" /><Legend c="#4a9bd4" t="Tool" />
-            <Legend c="#5f7183" t="Event" /><Legend c="#ff5f56" t="BLOCK" />
+            <Legend c="#e8920c" t="Agent" /><Legend c="#1f7fd6" t="Tool" />
+            <Legend c="#3d4d5c" t="Event" /><Legend c="#c0392b" t="BLOCK" />
           </span>
         </div>
       </div>

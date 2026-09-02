@@ -5,16 +5,8 @@ import type { Agent } from '../lib/types'
 import { StatusDot } from '../components/StatusDot'
 import { EmptyState } from '../components/EmptyState'
 import { SkeletonRows } from '../components/Skeleton'
+import { CAPABILITY_GROUPS } from '../lib/capabilities'
 
-// 能力项：一个 agent 能做/不能做某类操作。rule_id 对应引擎的工具/动作。
-const CAPS: { rule_id: string; label: string; desc: string; l2?: boolean }[] = [
-  { rule_id: 'Bash', label: 'Shell 执行', desc: '跑任意 shell 命令（高危）', l2: true },
-  { rule_id: 'WebFetch', label: '网络外发', desc: '向外部 URL 发请求（数据外泄风险）', l2: true },
-  { rule_id: 'Write', label: '写文件', desc: '创建/覆盖文件' },
-  { rule_id: 'Edit', label: '改文件', desc: '编辑已有文件' },
-  { rule_id: 'Read', label: '读文件', desc: '读取本地文件（含敏感路径检测）' },
-  { rule_id: 'WebSearch', label: '联网搜索', desc: '发起网络搜索' },
-]
 const ACTIONS = ['allow', 'confirm', 'block'] as const
 
 /** Control — per-agent capability policy. Pick an agent, toggle what it may do. */
@@ -41,8 +33,8 @@ export default function Control() {
     if (glob) return glob.action
     return 'allow'
   }
-  const setAction = (rule: string, action: string) =>
-    upsert.mutate({ agent_id: sel, rule_id: rule, action, axis: 'permission', enabled: true })
+  const setAction = (rule: string, action: string, selector: Record<string, string>) =>
+    upsert.mutate({ agent_id: sel, rule_id: rule, action, axis: 'permission', enabled: true, selector })
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -82,40 +74,94 @@ export default function Control() {
               </div>
               <div className="small dim" style={{ marginBottom: 16 }}>允许 = 直接放行 · 确认 = 需人工确认 · 拦截 = 直接阻断</div>
 
-              <div className="col" style={{ gap: 10, maxWidth: 640 }}>
-                {CAPS.map((c) => {
-                  const cur = actionFor(c.rule_id)
-                  return (
-                    <div key={c.rule_id} className="card card-pad row-between">
-                      <div>
-                        <div className="row" style={{ gap: 8 }}>
-                          <span style={{ fontWeight: 600 }}>{c.label}</span>
-                          {c.l2 && <span className="badge badge-confirm">L2 高危</span>}
-                          <span className="chip mono small">{c.rule_id}</span>
-                        </div>
-                        <div className="small dim" style={{ marginTop: 3 }}>{c.desc}</div>
-                      </div>
-                      <div className="seg">
-                        {ACTIONS.map((act) => (
-                          <button key={act}
-                            className={`seg-item ${cur === act ? 'on' : ''}`}
-                            style={cur === act ? segOnColor(act) : undefined}
-                            onClick={() => setAction(c.rule_id, act)}>
-                            {act === 'allow' ? '允许' : act === 'confirm' ? '确认' : '拦截'}
-                          </button>
-                        ))}
-                      </div>
+              <div className="col" style={{ gap: 18, maxWidth: 780 }}>
+                {CAPABILITY_GROUPS.map((group) => (
+                  <section key={group.id}>
+                    <div className="row-between" style={{ marginBottom: 8 }}>
+                      <div className="h-sec" style={{ margin: 0 }}>{group.label}</div>
+                      <span className="small dim">{group.hint}</span>
                     </div>
-                  )
-                })}
+                    <div className="col" style={{ gap: 8 }}>
+                      {group.items.map((c) => {
+                        const cur = actionFor(c.rule_id)
+                        return (
+                          <div key={c.rule_id} className="card card-pad row-between">
+                            <div>
+                              <div className="row" style={{ gap: 8 }}>
+                                <span style={{ fontWeight: 600 }}>{c.label}</span>
+                                {c.l2 && <span className="badge badge-confirm">L2 高危</span>}
+                                <span className="chip mono small">{c.rule_id}</span>
+                              </div>
+                              <div className="small dim" style={{ marginTop: 3 }}>{c.desc}</div>
+                            </div>
+                            <div className="seg">
+                              {ACTIONS.map((act) => (
+                                <button key={act}
+                                  className={`seg-item ${cur === act ? 'on' : ''}`}
+                                  style={cur === act ? segOnColor(act) : undefined}
+                                  onClick={() => setAction(c.rule_id, act, c.selector)}>
+                                  {act === 'allow' ? '允许' : act === 'confirm' ? '确认' : '拦截'}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </section>
+                ))}
               </div>
               <div className="small dim" style={{ marginTop: 14 }}>
                 规则写入 <code>/api/policies</code>（agent={sel}）。未配的项走内置三级风险模型默认值。
+              </div>
+
+              {/* 动态 MCP / Skills：来自该 agent 实际安装清单（/api/inventory），不预设 */}
+              <div style={{ marginTop: 26 }}>
+                <div className="h-sec" style={{ marginBottom: 6 }}>该 Agent 已安装的 MCP / Skills <span className="dim">(动态发现)</span></div>
+                <div className="small dim" style={{ marginBottom: 10 }}>来自探针上报的组件清单；状态为 pending_review 表示等待确认。</div>
+                <InventoryList agentId={sel} />
               </div>
             </>
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+function InventoryList({ agentId }: { agentId: string }) {
+  const { data, isLoading } = useQuery({ queryKey: ['inventory', agentId], queryFn: () => api.inventory(agentId), refetchInterval: 15000 })
+  const items = (data || []) as any[]
+  const mcps = items.filter((i) => i.kind === 'mcp_server')
+  const skills = items.filter((i) => i.kind === 'skill')
+  if (isLoading) return <SkeletonRows n={3} h={40} />
+  if (items.length === 0) return <div className="small dim">暂无组件上报（探针每 30s 发现一次）。</div>
+  return (
+    <div className="col" style={{ gap: 10 }}>
+      {mcps.length > 0 && (
+        <div>
+          <div className="small" style={{ fontWeight: 600, marginBottom: 6 }}>MCP 服务 <span className="dim">({mcps.length})</span></div>
+          <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+            {mcps.map((m) => (
+              <span key={m.stable_key || m.name} className="chip" title={`${m.install_path || ''} · ${m.source || ''}`}>
+                {m.name} <span className={`small ${m.status === 'pending_review' ? 'dim' : ''}`}>{m.status === 'pending_review' ? '(待确认)' : m.status}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      {skills.length > 0 && (
+        <div>
+          <div className="small" style={{ fontWeight: 600, marginBottom: 6 }}>Skills <span className="dim">({skills.length})</span></div>
+          <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+            {skills.map((s) => (
+              <span key={s.stable_key || s.name} className="chip" title={s.install_path || ''}>
+                {s.name} <span className="small dim">{s.status === 'pending_review' ? '(待确认)' : s.status}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

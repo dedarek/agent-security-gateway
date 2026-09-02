@@ -18,11 +18,11 @@ export default function AgentDetail() {
   const [confirmDel, setConfirmDel] = useState(false)
   const del = useMutation({
     mutationFn: () => api.deleteAgent(agentId),
-    onSuccess: () => { window.location.href = '/fleet' },
+    onSuccess: () => { window.location.href = '/agents' },
   })
 
   if (isLoading) return <div style={{ padding: 22 }}><SkeletonRows n={6} /></div>
-  if (!data) return <EmptyState icon="✕" title="Agent 不存在" action={<Link className="btn" to="/fleet">返回舰队</Link>} />
+  if (!data) return <EmptyState icon="✕" title="Agent 不存在" action={<Link className="btn" to="/agents">返回舰队</Link>} />
 
   const a = data.agent
   const chain = data.chain || []
@@ -34,7 +34,7 @@ export default function AgentDetail() {
 
   return (
     <div style={{ padding: 22, maxWidth: 980 }}>
-      <Link to="/fleet" className="small dim">← 返回舰队</Link>
+      <Link to="/agents" className="small dim">← 返回舰队</Link>
       <div className="row" style={{ gap: 10, margin: '8px 0 4px' }}>
         {logoFor(agentLogoKey) && <BrandLogo name={agentLogoKey} size={26} />}
         <h1 className="h-page" style={{ margin: 0 }}>{a.alias || a.agent_id}</h1>

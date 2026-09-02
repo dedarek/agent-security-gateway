@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/dedarek/agent-security-gateway/api"
@@ -550,6 +551,25 @@ type singleLock struct {
 }
 
 func acquireSingleLock(path string) (*singleLock, error) {
+	// Absolute path: the lock must guard the same file regardless of cwd.
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	// stale-lock recovery: if the lock exists but its PID is not a live
+	// gateway process (PID reuse safe — checks cmdline, not just signal 0),
+	// remove it and retry.
+	for attempt := 0; attempt < 2; attempt++ {
+		if b, err := os.ReadFile(path); err == nil {
+			var pid int
+			if _, err := fmt.Sscanf(strings.TrimSpace(string(b)), "%d", &pid); err == nil && pid > 0 {
+				if !isGatewayProcess(pid) {
+					os.Remove(path)
+					continue
+				}
+			}
+		}
+		break
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		return nil, err
@@ -557,6 +577,16 @@ func acquireSingleLock(path string) (*singleLock, error) {
 	fmt.Fprintf(f, "%d\n", os.Getpid())
 	f.Close()
 	return &singleLock{path: path}, nil
+}
+
+// isGatewayProcess reports whether PID is a live asg gateway (not a reused
+// PID from an unrelated process).
+func isGatewayProcess(pid int) bool {
+	cmdline, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(cmdline), "gateway")
 }
 
 func (l *singleLock) release() {

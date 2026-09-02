@@ -111,31 +111,30 @@ export default function Live({ streamLive = true }: { streamLive?: boolean }) {
           <div className="card card-pad col" style={{ gap: 12 }}>
             <div className="row-between">
               <div className="h-sec" style={{ fontSize: 13 }}>Top 5 风险事件类型</div>
-              <span className="small dim">防护拦截分布</span>
+              <span className="small dim">风险告警分布 · 实时</span>
             </div>
             <div>
-              {[
-                { name: '高危命令与脚本注入 (Command Injection)', count: blocks, pct: blocks > 0 ? 100 : 0 },
-                { name: '敏感凭据与文件越权访问 (Credential Access)', count: confirms, pct: confirms > 0 ? 60 : 0 },
-                { name: '提示词劫持与意图伪造 (Prompt Hijack)', count: Math.floor(blocks / 2), pct: blocks > 0 ? 40 : 0 },
-                { name: '外部不可信网络外联 (Exfiltration)', count: 0, pct: 0 },
-                { name: '非合规模型调用 (Non-standard Model)', count: 0, pct: 0 },
-              ].map((item, idx) => (
-                <div key={item.name} className="rank-row">
-                  <span className={`badge-rank ${idx === 0 && item.count > 0 ? 'badge-rank-1' : idx === 1 && item.count > 0 ? 'badge-rank-2' : idx === 2 && item.count > 0 ? 'badge-rank-3' : 'badge-rank-other'}`}>
-                    {idx + 1}
-                  </span>
-                  <span style={{ width: 190, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.name}>
-                    {item.name}
-                  </span>
-                  <div className="rank-progress">
-                    <div className="rank-progress-bar" style={{ width: `${item.pct}%`, background: idx === 0 ? 'var(--block)' : 'var(--confirm)' }} />
+              {((stats?.risks || []) as any[]).slice(0, 5).map((item, idx) => {
+                const maxVal = Math.max(1, ...((stats?.risks || []).map((x: any) => x.count)))
+                const pct = Math.min(100, Math.round((item.count / maxVal) * 100))
+                return (
+                  <div key={item.name} className="rank-row">
+                    <span className={`badge-rank ${idx === 0 ? 'badge-rank-1' : idx === 1 ? 'badge-rank-2' : idx === 2 ? 'badge-rank-3' : 'badge-rank-other'}`}>
+                      {idx + 1}
+                    </span>
+                    <span style={{ width: 190, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.name}>
+                      {item.name}
+                    </span>
+                    <div className="rank-progress">
+                      <div className="rank-progress-bar" style={{ width: `${Math.max(5, pct)}%`, background: idx === 0 ? 'var(--block)' : 'var(--confirm)' }} />
+                    </div>
+                    <span style={{ width: 36, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+                      {item.count}
+                    </span>
                   </div>
-                  <span style={{ width: 36, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
-                    {item.count}
-                  </span>
-                </div>
-              ))}
+                )
+              })}
+              {(!stats?.risks || stats.risks.length === 0) && <div className="small dim" style={{ padding: '20px 0', textAlign: 'center' }}>暂无风险告警</div>}
             </div>
           </div>
         </div>

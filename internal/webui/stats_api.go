@@ -1,9 +1,11 @@
 package webui
 
 import (
+	"encoding/base64"
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/dedarek/agent-security-gateway/api"
@@ -34,9 +36,10 @@ func (s *Server) apiStatsSummary(w http.ResponseWriter, r *http.Request) {
 
 	verdict := map[string]int{"block": 0, "confirm": 0, "allow": 0, "redact": 0, "other": 0}
 	tools := map[string]int{}
-	engines := map[string]map[string]int{}   // engine -> verdict -> count
-	perAgent := map[string]*[3]int{}        // agent -> [block, confirm, total]
-	hours := map[string]map[string]int{}    // hour bucket -> verdict -> count
+	engines := map[string]map[string]int{} // engine -> verdict -> count
+	perAgent := map[string]*[3]int{}       // agent -> [block, confirm, total]
+	hours := map[string]map[string]int{}   // hour bucket -> verdict -> count
+	risks := map[string]int{}              // risk key -> count
 
 	for _, ev := range events {
 		v := ev.Decision.Final.String()
@@ -58,6 +61,13 @@ func (s *Server) apiStatsSummary(w http.ResponseWriter, r *http.Request) {
 			tool = "unknown"
 		}
 		tools[tool]++
+
+		// risk classification (dynamic, from real events)
+		if vk == "block" || vk == "confirm" {
+			if rk := classifyRisk(tool, string(ev.Call.Arguments)); rk != "" {
+				risks[rk]++
+			}
+		}
 
 		for _, sig := range ev.Decision.Signals {
 			if sig.Engine == "" {
@@ -135,12 +145,63 @@ func (s *Server) apiStatsSummary(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(hourList, func(i, j int) bool { return hourList[i]["hour"].(string) < hourList[j]["hour"].(string) })
 
+	// risk types: dynamic aggregation, Chinese labels, sorted desc, drop zeros
+	riskList := make([]map[string]any, 0, len(risks))
+	for name, c := range risks {
+		riskList = append(riskList, map[string]any{"name": name, "count": c})
+	}
+	sort.Slice(riskList, func(i, j int) bool { return riskList[i]["count"].(int) > riskList[j]["count"].(int) })
+	if len(riskList) > 5 {
+		riskList = riskList[:5]
+	}
+
 	writeJSON(w, map[string]any{
 		"verdict":   verdict,
 		"tools":     toolList,
 		"by_hour":   hourList,
 		"engines":   engineList,
 		"per_agent": agentList,
+		"risks":     riskList,
 		"total":     len(events),
 	})
+}
+
+// classifyRisk maps a BLOCK/CONFIRM event to a Chinese risk type label.
+// Dynamic: derived from the actual tool + arguments, not a static preset.
+func classifyRisk(tool string, argsRaw string) string {
+	t := strings.ToLower(tool)
+	s := strings.ToLower(argsRaw)
+	// decode base64 arguments (probe wraps tool_input in base64)
+	if dec, err := base64.StdEncoding.DecodeString(s); err == nil {
+		s = strings.ToLower(string(dec))
+	}
+	// 1. sensitive credential access (Read/Write/Edit of secret files)
+	if strings.Contains(t, "read") || strings.Contains(t, "write") || strings.Contains(t, "edit") {
+		for _, k := range []string{".env", "token", "secret", "password", "credential", "api_key", "private_key", "ssh"} {
+			if strings.Contains(s, k) {
+				return "敏感凭据与文件越权访问"
+			}
+		}
+	}
+	// 2. command injection / destructive shell
+	if strings.Contains(t, "bash") || strings.Contains(t, "shell") || strings.Contains(t, "exec") {
+		for _, k := range []string{"rm -rf", "drop table", "shutdown", "mkfs", ":(){", "curl", "wget", "chmod", "chown", "sudo"} {
+			if strings.Contains(s, k) {
+				return "高危命令与脚本注入"
+			}
+		}
+	}
+	// 3. exfiltration (network tools)
+	if strings.Contains(t, "webfetch") || strings.Contains(t, "websearch") || strings.Contains(t, "http") || strings.Contains(t, "network") {
+		return "外部不可信网络外联"
+	}
+	// 4. prompt hijack (task delegation / agentic tools)
+	if strings.Contains(t, "task") || strings.Contains(t, "agent") || strings.Contains(t, "delegate") || strings.Contains(t, "prompt") {
+		return "提示词劫持与意图伪造"
+	}
+	// 5. non-standard model (llm.* events)
+	if strings.Contains(t, "llm") {
+		return "非合规模型调用"
+	}
+	return "敏感操作"
 }

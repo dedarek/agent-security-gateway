@@ -58,6 +58,7 @@ export const api = {
   ontoLineage: (focus?: string) => get<any>(`/api/onto/lineage${focus ? `?focus=${encodeURIComponent(focus)}` : ''}`),
   ontoEvidence: (eventId: string) => get<any>(`/api/onto/evidence?event=${encodeURIComponent(eventId)}`),
   ontoGraph: () => get<any>('/api/onto/graph'),
+  inventory: (agentId?: string) => get<any[]>(`/api/inventory${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`),
   approvals: () => get<any[]>('/api/approvals'),
   approvalDecide: (id: string, approve: boolean) => post<any>('/api/approvals', { id, approve }),
   suggestions: () => get<any[]>('/api/suggestions'),
