@@ -53,6 +53,7 @@ export function useEventStream(onActivity?: (step: StreamStep) => void): StreamS
       es.addEventListener('activity', (e) => {
         try {
           const step = JSON.parse((e as MessageEvent).data) as StreamStep
+          qc.setQueryData<StreamStep[]>(['stream-activity'], (old = []) => [step, ...old].slice(0, 200))
           cbRef.current?.(step)
         } catch { /* ignore malformed */ }
       })

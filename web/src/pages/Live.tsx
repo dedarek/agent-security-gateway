@@ -77,7 +77,7 @@ export default function Live({ streamLive = true }: { streamLive?: boolean }) {
           {/* Top 5 风险智能体 */}
           <div className="card card-pad col" style={{ gap: 12 }}>
             <div className="row-between">
-              <div className="h-sec" style={{ fontSize: 13 }}>Top 5 风险智能体</div>
+              <div className="h-sec h-sec-accent" style={{ fontSize: 13 }}>Top 5 风险智能体</div>
               <span className="small dim">近窗事件数</span>
             </div>
             <div>
@@ -110,7 +110,7 @@ export default function Live({ streamLive = true }: { streamLive?: boolean }) {
           {/* Top 5 风险类型分布 */}
           <div className="card card-pad col" style={{ gap: 12 }}>
             <div className="row-between">
-              <div className="h-sec" style={{ fontSize: 13 }}>Top 5 风险事件类型</div>
+              <div className="h-sec h-sec-accent" style={{ fontSize: 13 }}>Top 5 风险事件类型</div>
               <span className="small dim">风险告警分布 · 实时</span>
             </div>
             <div>
@@ -140,15 +140,15 @@ export default function Live({ streamLive = true }: { streamLive?: boolean }) {
         </div>
 
         {/* 底部全宽趋势图 */}
-        <div className="card card-pad col" style={{ gap: 10, marginBottom: 20 }}>
+        <div className="card card-pad card-accent col" style={{ gap: 10, marginBottom: 20 }}>
           <div className="row-between">
-            <div className="h-sec" style={{ fontSize: 13 }}>风险拦截趋势</div>
+            <div className="h-sec h-sec-accent" style={{ fontSize: 13 }}>风险拦截趋势</div>
             <div className="row" style={{ gap: 16, fontSize: 12 }}>
               <span className="row" style={{ gap: 6 }}><span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--brand)' }} /> 会话请求</span>
               <span className="row" style={{ gap: 6 }}><span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--block)' }} /> 高危拦截</span>
             </div>
           </div>
-          <Trend data={stats?.by_hour || []} height={150} />
+          <Trend data={stats?.by_hour || []} height={220} />
         </div>
 
         <div className="row-between" style={{ marginBottom: 10 }}>
@@ -176,13 +176,13 @@ export default function Live({ streamLive = true }: { streamLive?: boolean }) {
 
 function Kpi({ label, value, sub, color, icon }: { label: string; value: number | string; sub?: string; color?: string; icon?: string }) {
   return (
-    <div className="card" style={{ padding: '16px 20px', flex: '1 1 200px', minWidth: 180, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+    <div className="card card-hover" style={{ padding: '18px 20px', flex: '1 1 200px', minWidth: 180, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
       <div>
-        <div style={{ fontSize: 13, color: 'var(--fg-1)', fontWeight: 500, marginBottom: 4 }}>{label}</div>
-        <div style={{ fontSize: 30, fontWeight: 700, color: color || 'var(--fg-0)', fontVariantNumeric: 'tabular-nums', lineHeight: 1.1 }}>{value}</div>
+        <div style={{ fontSize: 13, color: 'var(--fg-1)', fontWeight: 500, marginBottom: 6 }}>{label}</div>
+        <div style={{ fontSize: 32, fontWeight: 800, color: color || 'var(--fg-0)', fontVariantNumeric: 'tabular-nums', lineHeight: 1.05, letterSpacing: '-0.02em' }}>{value}</div>
         {sub && <div className="small" style={{ color: 'var(--fg-2)', marginTop: 6 }}>{sub}</div>}
       </div>
-      <div style={{ fontSize: 24, opacity: 0.85 }}>{icon || '📈'}</div>
+      <div style={{ fontSize: 26, opacity: 0.9, filter: 'saturate(1.1)' }}>{icon || '📈'}</div>
     </div>
   )
 }

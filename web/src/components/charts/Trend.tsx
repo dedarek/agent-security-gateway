@@ -2,8 +2,8 @@ export type HourBucket = { hour: string; block: number; confirm: number; allow: 
 
 /** Stacked-area 24h verdict trend, pure SVG with hover crosshair. */
 export function Trend({ data, height = 120 }: { data: HourBucket[]; height?: number }) {
-  const W = 560
-  const pad = { l: 8, r: 8, t: 10, b: 20 }
+  const W = 1000
+  const pad = { l: 8, r: 8, t: 12, b: 22 }
   const iw = W - pad.l - pad.r
   const ih = height - pad.t - pad.b
   const peak = Math.max(1, ...data.map((d) => d.block + d.confirm + d.allow))
@@ -21,14 +21,28 @@ export function Trend({ data, height = 120 }: { data: HourBucket[]; height?: num
 
   return (
     <div style={{ position: 'relative', width: '100%' }}>
-      <svg viewBox={`0 0 ${W} ${height}`} width="100%" height={height} role="img" aria-label="24h verdict trend" style={{ display: 'block' }}>
+      <svg viewBox={`0 0 ${W} ${height}`} width="100%" height={height} preserveAspectRatio="none" role="img" aria-label="24h verdict trend" style={{ display: 'block' }}>
+        <defs>
+          <linearGradient id="tr-block" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor="var(--block)" stopOpacity="0.55" />
+            <stop offset="1" stopColor="var(--block)" stopOpacity="0.08" />
+          </linearGradient>
+          <linearGradient id="tr-confirm" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor="var(--confirm)" stopOpacity="0.5" />
+            <stop offset="1" stopColor="var(--confirm)" stopOpacity="0.06" />
+          </linearGradient>
+          <linearGradient id="tr-allow" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor="var(--allow)" stopOpacity="0.42" />
+            <stop offset="1" stopColor="var(--allow)" stopOpacity="0.05" />
+          </linearGradient>
+        </defs>
         {[0.25, 0.5, 0.75].map((f) => (
-          <line key={f} x1={pad.l} x2={W - pad.r} y1={pad.t + ih * f} y2={pad.t + ih * f} stroke="var(--line)" strokeWidth={1} strokeDasharray="3 3" />
+          <line key={f} x1={pad.l} x2={W - pad.r} y1={pad.t + ih * f} y2={pad.t + ih * f} stroke="var(--line)" strokeWidth={1} strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
         ))}
-        <path d={area((d) => d.allow, () => 0)} fill="var(--allow)" opacity={0.25} />
-        <path d={area((d) => d.confirm, (d) => d.allow)} fill="var(--confirm)" opacity={0.3} />
-        <path d={area((d) => d.block, (d) => d.allow + d.confirm)} fill="var(--block)" opacity={0.35} />
-        <path d={data.map((d, i) => `${i === 0 ? 'M' : 'L'} ${x(i).toFixed(1)} ${y(d.allow + d.confirm + d.block).toFixed(1)}`).join(' ')} fill="none" stroke="var(--block)" strokeWidth={1.5} opacity={0.8} />
+        <path d={area((d) => d.allow, () => 0)} fill="url(#tr-allow)" />
+        <path d={area((d) => d.confirm, (d) => d.allow)} fill="url(#tr-confirm)" />
+        <path d={area((d) => d.block, (d) => d.allow + d.confirm)} fill="url(#tr-block)" />
+        <path d={data.map((d, i) => `${i === 0 ? 'M' : 'L'} ${x(i).toFixed(1)} ${y(d.allow + d.confirm + d.block).toFixed(1)}`).join(' ')} fill="none" stroke="var(--block)" strokeWidth={2} opacity={0.9} vectorEffect="non-scaling-stroke" />
         {data.map((d, i) => (
           <g key={i}>
             <rect x={x(i) - iw / n / 2} y={pad.t} width={iw / n} height={ih} fill="transparent">

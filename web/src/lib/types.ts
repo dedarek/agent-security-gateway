@@ -3,8 +3,18 @@ export type Agent = {
   alias?: string
   agent_type?: string
   machine_name?: string
+  machine_id?: string
+  probe_id?: string
+  process_id?: number
+  os?: string
+  user?: string
+  ip?: string
+  declared_ips?: string[]
+  observed_ips?: string[]
+  connection_ip?: string
   model?: string
   provider?: string
+  observed_model?: string
   status: string
   isolation: string
   session_ids?: string[]
@@ -12,7 +22,6 @@ export type Agent = {
   last_activity?: string
   last_heartbeat?: string
   registered_at?: string
-  ip?: string
 }
 
 export type ChainStep = {

@@ -8,7 +8,7 @@ import Insight from './pages/Insight'
 import Fleet from './pages/Fleet'
 import Control from './pages/Control'
 import SemanticaPage from './pages/SemanticaPage'
-import { BrandLogo, logoFor } from './assets/logos'
+import { AsgMark } from './assets/AsgMark'
 
 const qc = new QueryClient()
 
@@ -41,16 +41,14 @@ function Shell() {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr', height: '100vh', background: 'var(--bg-0)' }}>
       <aside className="sidebar" style={{ display: 'flex', flexDirection: 'column', borderRight: '1px solid rgba(255,255,255,.06)' }}>
-        <div style={{ padding: '16px 18px 14px', borderBottom: '1px solid rgba(255,255,255,.08)' }}>
-          <div className="row" style={{ gap: 10, fontWeight: 800, fontSize: 16, color: '#fff', alignItems: 'center' }}>
-            {logoFor('claude_code') ? (
-              <BrandLogo name="claude_code" size={24} />
-            ) : (
-              <span style={{ width: 26, height: 26, borderRadius: 6, background: '#165dff', display: 'grid', placeItems: 'center', color: '#fff', fontWeight: 900, fontSize: 14 }}>A</span>
-            )}
-            <span>AgentSentry</span>
+        <div style={{ padding: '18px 18px 16px', borderBottom: '1px solid rgba(255,255,255,.08)' }}>
+          <div className="row" style={{ gap: 11, alignItems: 'center' }}>
+            <AsgMark size={30} />
+            <div className="col" style={{ gap: 1 }}>
+              <span style={{ fontWeight: 800, fontSize: 16, color: '#fff', letterSpacing: '0.01em', lineHeight: 1.1 }}>AgentSentry</span>
+              <span style={{ fontSize: 10.5, color: '#8aa0c0', fontWeight: 600, letterSpacing: '0.14em', textTransform: 'uppercase' }}>ASG · 智能体安全网关</span>
+            </div>
           </div>
-          <div style={{ fontSize: 11, color: '#86909c', marginTop: 4, letterSpacing: '0.02em' }}>ASG 企业安全网关</div>
         </div>
         <nav style={{ flex: 1, padding: '12px 10px', overflowY: 'auto' }}>
           {NAV_GROUPS.map((grp, gIdx) => (

@@ -7,10 +7,10 @@ import { VerdictBadge } from './VerdictBadge'
 import { Skeleton } from './Skeleton'
 
 const TYPE_COLOR: Record<string, string> = {
-  Agent: '#e8920c',   // 深橙（浅底高对比）
-  Tool: '#1f7fd6',    // 深蓝
-  Event: '#3d4d5c',   // 深灰蓝
-  ExternalActor: '#c0392b', // 深红
+  Agent: '#ffb020',   // 暖琥珀（深底霓虹）
+  Tool: '#3ba7ff',    // 亮蓝
+  Event: '#7d8ca3',   // 冷灰蓝
+  ExternalActor: '#ff4d5e', // 亮红
 }
 const TYPE_SHAPE: Record<string, string> = {
   Agent: 'ellipse',
@@ -42,6 +42,7 @@ export default function KGGraph({ focus }: { focus?: string }) {
   const [tracing, setTracing] = useState(false)
   const rawRef = useRef<{ nodes: KGNode[]; edges: KGEdge[] } | null>(null)
   const nodeById = useRef<Map<string, KGNode>>(new Map())
+  const animRef = useRef<number | null>(null)
 
   const render = useCallback(async (m: GraphMode) => {
     if (!containerRef.current) return
@@ -100,30 +101,31 @@ export default function KGGraph({ focus }: { focus?: string }) {
         } as any,
         style: [
           { selector: 'node', style: {
-            'background-color': 'data(color)', 'label': 'data(label)', 'color': '#1a2530',
-            'font-size': 8, 'text-valign': 'bottom', 'text-halign': 'center', 'text-margin-y': 4,
+            'background-color': 'data(color)', 'label': 'data(label)', 'color': '#e8eef7',
+            'font-size': 8, 'font-weight': 600, 'text-valign': 'bottom', 'text-halign': 'center', 'text-margin-y': 4,
             'text-wrap': 'wrap', 'text-max-width': 90, 'width': 'data(size)', 'height': 'data(size)',
-            'border-width': 2, 'border-color': '#ffffff', 'shape': 'data(shape)', 'overlay-opacity': 0,
-            'text-outline-width': 3, 'text-outline-color': '#ffffff',
+            'border-width': 2, 'border-color': 'rgba(255,255,255,.35)', 'shape': 'data(shape)', 'overlay-opacity': 0,
+            'text-outline-width': 3, 'text-outline-color': '#0a1224',
+            'background-opacity': 0.95,
           } as any },
           { selector: 'node[isBlock]', style: {
             'border-width': 3, 'border-color': '#ff5f56',
-            'shadow-blur': 18, 'shadow-color': '#ff5f56', 'shadow-opacity': 0.5,
+            'shadow-blur': 26, 'shadow-color': '#ff5f56', 'shadow-opacity': 0.75,
           } as any },
           { selector: 'edge', style: {
-            'width': 1.2, 'line-color': '#2e3c4e', 'target-arrow-color': '#2e3c4e',
+            'width': 1.4, 'line-color': '#3a4d6b', 'target-arrow-color': '#3a4d6b',
             'target-arrow-shape': 'triangle', 'curve-style': 'bezier', 'font-size': 6,
-            'label': '', 'arrow-scale': 0.8, 'opacity': 0.8,
+            'label': '', 'arrow-scale': 0.8, 'opacity': 0.7,
           } as any },
           { selector: 'edge[isBlock]', style: {
-            'line-color': '#ff5f56', 'target-arrow-color': '#ff5f56', 'width': 2.4, 'opacity': 1,
-            'line-style': 'dashed', 'line-dash-pattern': [6, 3],
+            'line-color': '#ff5f56', 'target-arrow-color': '#ff5f56', 'width': 2.6, 'opacity': 1,
+            'line-style': 'dashed', 'line-dash-pattern': [7, 4], 'line-dash-offset': 0,
           } as any },
           { selector: '.hl', style: { 'opacity': 1, 'z-index': 10 } as any },
-          { selector: 'node.hl', style: { 'border-width': 3, 'border-color': '#f5a623', 'z-index': 20 } as any },
-          { selector: 'edge.hl', style: { 'line-color': '#f5a623', 'target-arrow-color': '#f5a623', 'width': 3, 'opacity': 1 } as any },
-          { selector: '.dim', style: { 'opacity': 0.13 } as any },
-          { selector: 'node:selected', style: { 'border-width': 3, 'border-color': '#f5a623' } as any },
+          { selector: 'node.hl', style: { 'border-width': 3, 'border-color': '#ffd54a', 'shadow-blur': 22, 'shadow-color': '#ffd54a', 'shadow-opacity': 0.8, 'z-index': 20 } as any },
+          { selector: 'edge.hl', style: { 'line-color': '#ffd54a', 'target-arrow-color': '#ffd54a', 'width': 3.2, 'opacity': 1 } as any },
+          { selector: '.dim', style: { 'opacity': 0.1 } as any },
+          { selector: 'node:selected', style: { 'border-width': 3, 'border-color': '#ffd54a' } as any },
         ],
         wheelSensitivity: 0.2, minZoom: 0.12, maxZoom: 4,
       })
@@ -186,6 +188,21 @@ export default function KGGraph({ focus }: { focus?: string }) {
       ;(window as any)._cy = cy
       setLoading(false)
 
+      // 连续动效：taint 边流动（marching ants）+ BLOCK 节点呼吸脉冲，高帧
+      if (animRef.current) cancelAnimationFrame(animRef.current)
+      let dash = 0
+      let t0 = performance.now()
+      const blockNodes = cy.nodes().filter((n: any) => n.data('isBlock'))
+      const tick = (now: number) => {
+        dash = (dash - 0.6)
+        cy.edges('[isBlock]').style('line-dash-offset', dash)
+        const phase = (Math.sin((now - t0) / 620) + 1) / 2 // 0..1
+        blockNodes.style('shadow-blur', 18 + phase * 20)
+        blockNodes.style('shadow-opacity', 0.5 + phase * 0.4)
+        animRef.current = requestAnimationFrame(tick)
+      }
+      animRef.current = requestAnimationFrame(tick)
+
       // auto-focus from deep link (?focus=session_id): highlight first matching event
       if (focus) {
         const hit = cy.nodes().toArray().find((n) => n.id().includes(focus))
@@ -242,7 +259,7 @@ export default function KGGraph({ focus }: { focus?: string }) {
   useEffect(() => {
     render(mode)
     const t = setInterval(() => render(mode), 30000)
-    return () => clearInterval(t)
+    return () => { clearInterval(t); if (animRef.current) cancelAnimationFrame(animRef.current) }
   }, [mode, render])
 
   return (
@@ -262,8 +279,8 @@ export default function KGGraph({ focus }: { focus?: string }) {
           <button className="btn" onClick={handleReset}>重置高亮</button>
           <button className="btn" onClick={() => cyRef.current?.fit(undefined, 36)}>居中适配</button>
           <span className="row small dim" style={{ gap: 10 }}>
-            <Legend c="#e8920c" t="Agent" /><Legend c="#1f7fd6" t="Tool" />
-            <Legend c="#3d4d5c" t="Event" /><Legend c="#c0392b" t="BLOCK" />
+            <Legend c="#ffb020" t="Agent" /><Legend c="#3ba7ff" t="Tool" />
+            <Legend c="#7d8ca3" t="Event" /><Legend c="#ff4d5e" t="BLOCK" />
           </span>
         </div>
       </div>
@@ -279,7 +296,7 @@ export default function KGGraph({ focus }: { focus?: string }) {
         </div>
       )}
 
-      <div ref={containerRef} style={{ flex: 1, minHeight: 420, background: 'var(--bg-1)', borderRadius: 'var(--r-m)', border: '1px solid var(--line)', overflow: 'hidden' }} />
+      <div ref={containerRef} style={{ flex: 1, minHeight: 420, background: 'radial-gradient(120% 120% at 30% 20%, #0f1b33 0%, #0a1224 55%, #060b18 100%)', borderRadius: 'var(--r-m)', border: '1px solid #1c2b47', overflow: 'hidden', boxShadow: 'inset 0 0 80px rgba(0,0,0,.45)' }} />
       {loading && <Skeleton h={420} style={{ marginTop: -420, borderRadius: 'var(--r-m)' }} />}
 
       <div className="small dim" style={{ marginTop: 8 }}>
