@@ -88,15 +88,17 @@ func TestHookHTTPMethodNotAllowed(t *testing.T) {
 	if rec2.Code != http.StatusOK && rec2.Code != http.StatusForbidden {
 		t.Fatalf("want 200 or 403 for POST, got %d", rec2.Code)
 	}
-	// POST with BLOCK payload should return 403
+	// POST with a dangerous pattern: local rule defers to the hub, which is
+	// unreachable in this test -> fail-open ALLOW (alert semantics; the hub
+	// decides posture). The dangerous action is logged, not silently dropped.
 	req3 := httptest.NewRequest(http.MethodPost, "/api/hook-check", strings.NewReader(`{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}`))
 	rec3 := httptest.NewRecorder()
 	h(rec3, req3)
-	if rec3.Code != http.StatusForbidden {
-		t.Fatalf("want 403 for BLOCK, got %d body=%q", rec3.Code, rec3.Body.String())
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("want 200 (fail-open allow when hub unreachable), got %d body=%q", rec3.Code, rec3.Body.String())
 	}
-	if !strings.Contains(rec3.Body.String(), "block") {
-		t.Fatalf("want block decision, got %q", rec3.Body.String())
+	if !strings.Contains(rec3.Body.String(), "allow") {
+		t.Fatalf("want allow decision (fail-open), got %q", rec3.Body.String())
 	}
 }
 

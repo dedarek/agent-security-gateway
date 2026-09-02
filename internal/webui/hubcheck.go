@@ -9,6 +9,42 @@ import (
 	"github.com/dedarek/agent-security-gateway/internal/agentregistry"
 )
 
+// EnforcementMode controls whether the hook PEP actually blocks or only
+// alerts. ALERT mode logs a BLOCK-verdict alert but lets the tool run
+// (availability > enforcement); BLOCK mode denies as designed.
+type EnforcementMode string
+
+const (
+	EnforceBlock EnforcementMode = "block"
+	EnforceAlert EnforcementMode = "alert"
+)
+
+// SetEnforcementMode switches between block and alert-only enforcement.
+func (s *Server) SetEnforcementMode(m EnforcementMode) { s.enforceMode = m }
+
+// enforce blocks or alerts per the current mode. Returns true when the
+// request should be denied (only in block mode).
+func (s *Server) enforce(w http.ResponseWriter, payload struct {
+	SessionID     string          `json:"session_id"`
+	AgentID       string          `json:"agent_id"`
+	ToolName      string          `json:"tool_name"`
+	ToolInput     json.RawMessage `json:"tool_input"`
+	ToolResponse  json.RawMessage `json:"tool_response"`
+	HookEventName string          `json:"hook_event_name"`
+}, verdict, reason string) bool {
+	mode := s.enforceMode
+	if mode == "" {
+		mode = EnforceBlock // default stays block for safety
+	}
+	s.reportHookTool(payload, verdict, reason)
+	if mode == EnforceAlert {
+		writeAllow(w)
+		return false
+	}
+	writeBlock(w, reason)
+	return true
+}
+
 // apiHubCheck is the Hook PEP endpoint. Claude Code's PreToolUse hook POSTs
 // the tool call (via the local probe) here; the gateway runs it through the
 // decision engine (Cedar / taint / DLP) and returns ALLOW / BLOCK with a
@@ -82,8 +118,7 @@ func (s *Server) apiHubCheck(w http.ResponseWriter, r *http.Request) {
 	// 1. Deterministic local rules (dangerous patterns) — fast path, no engine.
 	reason := localHookVerdict(payload.ToolName, payload.ToolInput)
 	if reason != "" {
-		s.reportHookTool(payload, "BLOCK", reason)
-		writeBlock(w, reason)
+		s.enforce(w, payload, "BLOCK", reason)
 		return
 	}
 
@@ -93,8 +128,7 @@ func (s *Server) apiHubCheck(w http.ResponseWriter, r *http.Request) {
 	if s.Taints != nil && len(s.Taints(payload.SessionID)) > 0 && isExternalSinkTool(payload.ToolName, payload.ToolInput) {
 		src := s.Taints(payload.SessionID)[0].Source
 		reason := "DLP: session carries sensitive data (from " + src + ") and this call transmits externally"
-		s.reportHookTool(payload, "BLOCK", reason)
-		writeBlock(w, reason)
+		s.enforce(w, payload, "BLOCK", reason)
 		return
 	}
 	// 3. Decision engine (if wired): Cedar / taint / DLP.
@@ -108,15 +142,18 @@ func (s *Server) apiHubCheck(w http.ResponseWriter, r *http.Request) {
 		dec := s.Engine.EvaluatePre(r.Context(), call)
 		if dec.Final == api.VerdictBlock {
 			reason := "policy: " + firstReason(&dec)
-			s.reportHookTool(payload, "BLOCK", reason)
-			writeBlock(w, reason)
+			s.enforce(w, payload, "BLOCK", reason)
 			return
 		}
-		// CONFIRM: queue for human approval (async — no blocking). The probe
-		// returns an "ask" response (Claude Code shows a permission prompt);
-		// the operator decides in the console → tool continues or is denied.
+		// CONFIRM: queue for human approval (async — no blocking). In alert
+		// mode the request is allowed through immediately (availability).
 		if dec.Final == api.VerdictConfirm && s.Approvals != nil {
 			reason := "approval required: " + firstReason(&dec)
+			if s.enforceMode == EnforceAlert {
+				s.reportHookTool(payload, "CONFIRM", reason+" (alert mode: auto-allowed)")
+				writeAllow(w)
+				return
+			}
 			s.Approvals.Enqueue(call, dec)
 			s.reportHookTool(payload, "CONFIRM", reason)
 			w.Header().Set("Content-Type", "application/json")

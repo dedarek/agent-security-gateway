@@ -226,6 +226,9 @@ func serveCmd(args []string) {
 	uiSrv.SetEngine(reg)
 	uiSrv.SetDataAccess(engine.NewDataAccessRecorder(dbHandle, taint))
 	uiSrv.SetTaints(taint.SessionTaints)
+	// MVP availability: default to ALERT (log + allow) so agents are not
+	// blocked; operator can flip to block via config or later UI.
+	uiSrv.SetEnforcementMode(webui.EnforceAlert)
 	if dbHandle != nil {
 		webui.SetPoliciesDB(dbHandle)
 	}

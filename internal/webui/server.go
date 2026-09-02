@@ -60,6 +60,9 @@ type Server struct {
 	// Taints returns accumulated session taints (V0 DLP). Wired to the
 	// taint engine by the gateway.
 	Taints func(sessionID string) []session.TaintMark
+
+	// enforceMode: block (deny) or alert (log + allow). Default block.
+	enforceMode EnforcementMode
 }
 
 // DataAccessObserver is implemented by engine.DataAccessRecorder.
