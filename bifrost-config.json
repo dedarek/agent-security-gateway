@@ -1,0 +1,34 @@
+{
+  "providers": {
+    "openai": {
+      "keys": [
+        {
+          "name": "openai-primary",
+          "value": "env.OPENAI_API_KEY",
+          "models": ["*"],
+          "weight": 1.0
+        }
+      ]
+    }
+  },
+  "governance": {
+    "virtual_keys": [
+      {
+        "id": "vk-local",
+        "name": "Local Dev Key",
+        "value": "sk-bf-asg-local-demo-2026",
+        "is_active": true,
+        "provider_configs": [
+          {
+            "provider": "openai",
+            "weight": 1.0,
+            "allowed_models": ["*"]
+          }
+        ]
+      }
+    ]
+  },
+  "config_store": {
+    "enabled": false
+  }
+}

@@ -58,14 +58,8 @@ if [ -z "$HUB_URL" ]; then
   HUB_URL="https://asg-gateway.vip.cpolar.cn"
 fi
 if [ -z "$TENANT_KEY" ]; then
-  # allow dry-run without real key; real runs will still write placeholder so user can replace
-  if [ "$DRY_RUN" = "1" ]; then
-    TENANT_KEY="***"
-  else
-    echo "[asg-install] --tenant-key is required (or env ASG_TENANT_KEY)" >&2
-    echo "[asg-install] hint: sh scripts/asg-universal-install.sh --hub-url $HUB_URL --tenant-key sk-..." >&2
-    exit 2
-  fi
+  # Keyless onboarding — gateway auto-allocates tenant on first register (public-ingress).
+  TENANT_KEY=""
 fi
 
 # resolve config dir (POSIX, respects $HOME)
@@ -73,6 +67,47 @@ CONFIG_DIR="$HOME/.config/asg"
 UNIVERSAL_JSON="$CONFIG_DIR/universal.json"
 MCP_JSON="$CONFIG_DIR/mcp.json"
 LOG_FILE="$CONFIG_DIR/asg-connect.log"
+
+# === OTEL telemetry bootstrap (one-time, then zero-touch) ===
+# Persist OTEL_EXPORTER_OTLP_ENDPOINT so EVERY agent on this machine
+# (codex/claude/pi/custom) auto-reports activity+model to the gateway —
+# no per-agent env setup ever again.
+OTEL_ENDPOINT="${ASG_OTEL_ENDPOINT:-http://127.0.0.1:8090/v1/traces}"
+persist_otel_env() {
+  _ep="$1"
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*)
+      if command -v setx >/dev/null 2>&1; then
+        setx OTEL_EXPORTER_OTLP_ENDPOINT "$_ep" >/dev/null 2>&1 || true
+        setx OTEL_SERVICE_NAME "asg-agent" >/dev/null 2>&1 || true
+        echo "[asg-install] persisted OTEL env (Windows user-level)" >&2
+      fi
+      ;;
+    Darwin)
+      if command -v launchctl >/dev/null 2>&1; then
+        launchctl setenv OTEL_EXPORTER_OTLP_ENDPOINT "$_ep" 2>/dev/null || true
+        launchctl setenv OTEL_SERVICE_NAME "asg-agent" 2>/dev/null || true
+        echo "[asg-install] persisted OTEL env (launchctl)" >&2
+      fi
+      # also write to shell profile for new terminals
+      _prof="$HOME/.zprofile"
+      if [ -f "$HOME/.zshrc" ]; then _prof="$HOME/.zshrc"; fi
+      if [ -f "$HOME/.bash_profile" ]; then _prof="$HOME/.bash_profile"; fi
+      if ! grep -q "OTEL_EXPORTER_OTLP_ENDPOINT" "$_prof" 2>/dev/null; then
+        printf '\nexport OTEL_EXPORTER_OTLP_ENDPOINT="%s"\nexport OTEL_SERVICE_NAME="asg-agent"\n' "$_ep" >> "$_prof"
+        echo "[asg-install] appended OTEL env to $_prof" >&2
+      fi
+      ;;
+    Linux)
+      _prof="$HOME/.profile"
+      if [ -f "$HOME/.bashrc" ]; then _prof="$HOME/.bashrc"; fi
+      if ! grep -q "OTEL_EXPORTER_OTLP_ENDPOINT" "$_prof" 2>/dev/null; then
+        printf '\nexport OTEL_EXPORTER_OTLP_ENDPOINT="%s"\nexport OTEL_SERVICE_NAME="asg-agent"\n' "$_ep" >> "$_prof"
+        echo "[asg-install] appended OTEL env to $_prof" >&2
+      fi
+      ;;
+  esac
+}
 
 # helper: json-escape a string (minimal: backslash and double-quote)
 json_escape() {
@@ -100,6 +135,13 @@ find_asg_connect() {
     command -v asg-connect.exe
     return 0
   fi
+  # 1b. previously fetched darwin binary in CONFIG_DIR
+  for _cand in "$HOME/.config/asg/asg-connect-darwin-arm64" "$HOME/.config/asg/asg-connect-darwin-amd64" "$HOME/.config/asg/asg-connect"; do
+    if [ -x "$_cand" ] 2>/dev/null; then
+      printf '%s' "$_cand"
+      return 0
+    fi
+  done
   # 2. relative to this script
   _script_dir=$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd 2>/dev/null || echo ".")
   for _cand in "$_script_dir/../bin/asg-connect.exe" "$_script_dir/../bin/asg-connect" "$_script_dir/../asg-connect.exe" "$_script_dir/../asg-connect" "./bin/asg-connect.exe" "./bin/asg-connect" "./asg-connect.exe" "./asg-connect"; do
@@ -152,6 +194,9 @@ printf '%s' "$MCP_CONTENT" > "$MCP_JSON"
 chmod 600 "$MCP_JSON" 2>/dev/null || true
 echo "[asg-install] wrote $MCP_JSON (generic, harness-agnostic)" >&2
 
+# Persist OTEL env so agents auto-report (zero-touch after this one install)
+persist_otel_env "$OTEL_ENDPOINT"
+
 # start asg-connect serve in background if binary exists
 if [ "$ASG_BIN_FOUND" = "1" ] && [ -x "$ASG_BIN" ] 2>/dev/null; then
   # check if already listening
@@ -198,8 +243,69 @@ if [ "$ASG_BIN_FOUND" = "1" ] && [ -x "$ASG_BIN" ] 2>/dev/null; then
   fi
 else
   echo "[asg-install] asg-connect binary not found (looked for $ASG_BIN)" >&2
-  echo "[asg-install] build it: go build -o bin/asg-connect ./cmd/asg-connect" >&2
-  echo "[asg-install] then: $ASG_BIN serve -config $UNIVERSAL_JSON &" >&2
+  # Auto-fetch prebuilt binary from gateway (public) — harness-agnostic
+  _hub_base=$(printf '%s' "$HUB_URL" | sed 's:/*$::')
+  _uname_s=$(uname -s 2>/dev/null || echo "")
+  _uname_m=$(uname -m 2>/dev/null || echo "")
+  _bin_name="asg-connect"
+  case "$_uname_s" in
+    Darwin) case "$_uname_m" in arm64|aarch64) _bin_name="asg-connect-darwin-arm64" ;; *) _bin_name="asg-connect-darwin-amd64" ;; esac ;;
+    Linux) _bin_name="asg-connect" ;;
+  esac
+  _bin_url="$_hub_base/$_bin_name"
+  _bin_dest="$CONFIG_DIR/$_bin_name"
+  if command -v curl >/dev/null 2>&1; then
+    echo "[asg-install] fetching $_bin_url -> $_bin_dest" >&2
+    # Prefer gzipped for slow public tunnels; fallback to raw
+    _gz_url="$_bin_url.gz"
+    _gz_dest="$_bin_dest.gz"
+    if curl -fsSL --connect-timeout 10 --retry 2 --max-time 60 "$_gz_url" -o "$_gz_dest" 2>/dev/null && [ -s "$_gz_dest" ]; then
+      if command -v gzip >/dev/null 2>&1; then
+        gzip -dc "$_gz_dest" > "$_bin_dest" 2>/dev/null && chmod +x "$_bin_dest" 2>/dev/null || cp "$_gz_dest" "$_bin_dest"
+      else
+        # No gzip, use gz as binary (gateway serves with Content-Encoding, curl auto-decodes if --compressed)
+        cp "$_gz_dest" "$_bin_dest" 2>/dev/null; chmod +x "$_bin_dest" 2>/dev/null || true
+      fi
+      rm -f "$_gz_dest" 2>/dev/null || true
+      if [ -x "$_bin_dest" ] 2>/dev/null; then
+        ASG_BIN="$_bin_dest"
+        ASG_BIN_FOUND=1
+        echo "[asg-install] fetched $ASG_BIN (gz)" >&2
+      fi
+    fi
+    if [ "$ASG_BIN_FOUND" != "1" ]; then
+      if curl -fsSL --connect-timeout 10 --retry 2 --max-time 60 "$_bin_url" -o "$_bin_dest" 2>/dev/null; then
+        chmod +x "$_bin_dest" 2>/dev/null || true
+        if [ -x "$_bin_dest" ] 2>/dev/null; then ASG_BIN="$_bin_dest"; ASG_BIN_FOUND=1; echo "[asg-install] fetched $ASG_BIN" >&2; fi
+      else
+        echo "[asg-install] fetch failed: $_bin_url" >&2
+      fi
+    fi
+    if [ "$ASG_BIN_FOUND" = "1" ]; then
+      # retry start with fetched binary
+      mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+      if command -v nohup >/dev/null 2>&1; then
+        nohup "$ASG_BIN" serve -config "$UNIVERSAL_JSON" > "$LOG_FILE" 2>&1 &
+      else
+        "$ASG_BIN" serve -config "$UNIVERSAL_JSON" > "$LOG_FILE" 2>&1 &
+      fi
+      _pid=$!
+      echo "[asg-install] started $ASG_BIN serve (pid $_pid, log $LOG_FILE)" >&2
+      _ok=0
+      for _i in 1 2 3 4 5 6; do
+        sleep 0.5
+        if curl -s --max-time 1 "http://$LISTEN/healthz" 2>/dev/null | grep -q "ok"; then _ok=1; break; fi
+      done
+      if [ "$_ok" = "1" ]; then echo "[asg-install] probe healthy: http://$LISTEN/healthz => ok" >&2; else echo "[asg-install] warning: probe not yet healthy at http://$LISTEN/healthz (check $LOG_FILE)" >&2; fi
+    else
+      echo "[asg-install] fetch failed: $_bin_url" >&2
+      echo "[asg-install] build it: go build -o bin/asg-connect ./cmd/asg-connect" >&2
+      echo "[asg-install] then: $ASG_BIN serve -config $UNIVERSAL_JSON &" >&2
+    fi
+  else
+    echo "[asg-install] build it: go build -o bin/asg-connect ./cmd/asg-connect" >&2
+    echo "[asg-install] then: $ASG_BIN serve -config $UNIVERSAL_JSON &" >&2
+  fi
 fi
 
 echo "[asg-install] done." >&2

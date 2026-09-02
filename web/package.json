@@ -10,6 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@antv/g6": "^5.1.1",
+    "@antv/layout": "^2.0.0",
     "@tanstack/react-query": "^5.102.8",
     "cytoscape": "^3.34.2",
     "cytoscape-fcose": "^2.2.0",
