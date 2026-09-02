@@ -49,3 +49,10 @@ demo/
 
 # backup
 *.bak.html
+
+# Hermes / local scratch
+.hermes/
+*.rampart.lock
+
+# runtime data (already-tracked files unaffected)
+*.jsonl
