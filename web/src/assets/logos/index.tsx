@@ -20,7 +20,11 @@ const MAP: Record<string, string> = {
   opencode, pi, inflection: pi,
   openclaw, hermes, hermes_agent: hermes,
   claude_code: claudeCode, 'claude-code': claudeCode, claudecode: claudeCode,
+  // Codex is an OpenAI agent; keep the agent identity logo independent from
+  // the model field, which is intentionally empty for ChatGPT private login.
+  codex: openai, openai_codex: openai, 'openai-codex': openai,
   tencent, hunyuan: tencent, tencent_hunyuan: tencent, 'tencent-hunyuan': tencent,
+  hy3: tencent, 'hy3_paid': tencent, hy4: tencent, hunyuan_hy3: tencent,
 }
 
 function normalize(k: string): string {
