@@ -12,6 +12,7 @@
   "dependencies": {
     "@tanstack/react-query": "^5.102.8",
     "cytoscape": "^3.34.2",
+    "cytoscape-fcose": "^2.2.0",
     "motion": "^13.1.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",

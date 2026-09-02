@@ -18,6 +18,7 @@ import { EventStream } from '../components/EventStream'
 import { CAPABILITY_GROUPS } from '../lib/capabilities'
 import ProtectionStatus from '../components/ProtectionStatus'
 import ApprovalQueue from '../components/ApprovalQueue'
+import { CountUp, FadeInCard, AnimatedBar } from '../components/anims'
 
 const ACTIONS = ['allow', 'confirm', 'block'] as const
 
@@ -66,16 +67,16 @@ export default function Live({ streamLive = true }: { streamLive?: boolean }) {
 
         {/* 顶部核心 KPI 卡片 */}
         <div className="row" style={{ gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
-          <Kpi label="在线智能体" value={online} sub={`总注册: ${real.length} 个`} color="var(--brand)" icon="🤖" />
-          <Kpi label="高危拦截" value={blocks} sub={`待确认: ${confirms} 件`} color="var(--block)" icon="🚫" />
-          <Kpi label="正常放行" value={allows} sub={`活跃数: ${active}`} color="var(--allow)" icon="🛡️" />
-          <Kpi label="本体安全节点" value={kg.node_count ?? kg.entities ?? 0} sub="KG 语义图谱" icon="🕸️" />
+          <Kpi label="在线智能体" value={online} sub={`总注册: ${real.length} 个`} color="var(--brand)" icon="🤖" index={0} />
+          <Kpi label="高危拦截" value={blocks} sub={`待确认: ${confirms} 件`} color="var(--block)" icon="🚫" index={1} />
+          <Kpi label="正常放行" value={allows} sub={`活跃数: ${active}`} color="var(--allow)" icon="🛡️" index={2} />
+          <Kpi label="本体安全节点" value={kg.node_count ?? kg.entities ?? 0} sub="KG 语义图谱" icon="🕸️" index={3} />
         </div>
 
         {/* 中间布局：Top5 排行 与 威胁分布 */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20 }}>
           {/* Top 5 风险智能体 */}
-          <div className="card card-pad col" style={{ gap: 12 }}>
+          <FadeInCard index={4} className="card card-pad col" style={{ gap: 12 }}>
             <div className="row-between">
               <div className="h-sec h-sec-accent" style={{ fontSize: 13 }}>Top 5 风险智能体</div>
               <span className="small dim">近窗事件数</span>
@@ -95,7 +96,7 @@ export default function Live({ streamLive = true }: { streamLive?: boolean }) {
                       {displayAlias(ag)}
                     </span>
                     <div className="rank-progress">
-                      <div className="rank-progress-bar" style={{ width: `${Math.max(5, pct)}%`, background: idx === 0 ? 'var(--block)' : 'var(--brand)' }} />
+                      <AnimatedBar className="rank-progress-bar" pct={Math.max(5, pct)} color={idx === 0 ? 'var(--block)' : 'var(--brand)'} />
                     </div>
                     <span style={{ width: 36, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
                       {cnt}
@@ -105,10 +106,10 @@ export default function Live({ streamLive = true }: { streamLive?: boolean }) {
               })}
               {real.length === 0 && <div className="small dim" style={{ padding: '20px 0', textAlign: 'center' }}>暂无风险数据</div>}
             </div>
-          </div>
+          </FadeInCard>
 
           {/* Top 5 风险类型分布 */}
-          <div className="card card-pad col" style={{ gap: 12 }}>
+          <FadeInCard index={5} className="card card-pad col" style={{ gap: 12 }}>
             <div className="row-between">
               <div className="h-sec h-sec-accent" style={{ fontSize: 13 }}>Top 5 风险事件类型</div>
               <span className="small dim">风险告警分布 · 实时</span>
@@ -126,7 +127,7 @@ export default function Live({ streamLive = true }: { streamLive?: boolean }) {
                       {item.name}
                     </span>
                     <div className="rank-progress">
-                      <div className="rank-progress-bar" style={{ width: `${Math.max(5, pct)}%`, background: idx === 0 ? 'var(--block)' : 'var(--confirm)' }} />
+                      <AnimatedBar className="rank-progress-bar" pct={Math.max(5, pct)} color={idx === 0 ? 'var(--block)' : 'var(--confirm)'} />
                     </div>
                     <span style={{ width: 36, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
                       {item.count}
@@ -136,7 +137,7 @@ export default function Live({ streamLive = true }: { streamLive?: boolean }) {
               })}
               {(!stats?.risks || stats.risks.length === 0) && <div className="small dim" style={{ padding: '20px 0', textAlign: 'center' }}>暂无风险告警</div>}
             </div>
-          </div>
+          </FadeInCard>
         </div>
 
         {/* 底部全宽趋势图 */}
@@ -174,16 +175,19 @@ export default function Live({ streamLive = true }: { streamLive?: boolean }) {
   )
 }
 
-function Kpi({ label, value, sub, color, icon }: { label: string; value: number | string; sub?: string; color?: string; icon?: string }) {
+function Kpi({ label, value, sub, color, icon, index = 0 }: { label: string; value: number | string; sub?: string; color?: string; icon?: string; index?: number }) {
+  const isNum = typeof value === 'number'
   return (
-    <div className="card card-hover" style={{ padding: '18px 20px', flex: '1 1 200px', minWidth: 180, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+    <FadeInCard index={index} className="card card-hover" style={{ padding: '18px 20px', flex: '1 1 200px', minWidth: 180, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
       <div>
         <div style={{ fontSize: 13, color: 'var(--fg-1)', fontWeight: 500, marginBottom: 6 }}>{label}</div>
-        <div style={{ fontSize: 32, fontWeight: 800, color: color || 'var(--fg-0)', fontVariantNumeric: 'tabular-nums', lineHeight: 1.05, letterSpacing: '-0.02em' }}>{value}</div>
+        <div style={{ fontSize: 32, fontWeight: 800, color: color || 'var(--fg-0)', fontVariantNumeric: 'tabular-nums', lineHeight: 1.05, letterSpacing: '-0.02em' }}>
+          {isNum ? <CountUp value={value as number} /> : value}
+        </div>
         {sub && <div className="small" style={{ color: 'var(--fg-2)', marginTop: 6 }}>{sub}</div>}
       </div>
       <div style={{ fontSize: 26, opacity: 0.9, filter: 'saturate(1.1)' }}>{icon || '📈'}</div>
-    </div>
+    </FadeInCard>
   )
 }
 

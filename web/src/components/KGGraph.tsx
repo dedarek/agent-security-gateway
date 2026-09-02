@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import cytoscape from 'cytoscape'
+import fcose from 'cytoscape-fcose'
 import { api } from '../lib/api'
 import { buildOntoSubgraph, type GraphMode, type KGNode, type KGEdge } from '../lib/graphModel'
 import { Drawer } from './Drawer'
 import { VerdictBadge } from './VerdictBadge'
 import { Skeleton } from './Skeleton'
+
+// 注册 fcose 力导向布局（比内置 cose 更均匀、无重叠、更好看）
+let _fcoseReg = false
+if (!_fcoseReg) { try { cytoscape.use(fcose as any); _fcoseReg = true } catch { /* already registered */ } }
 
 const TYPE_COLOR: Record<string, string> = {
   Agent: '#ffb020',   // 暖琥珀（深底霓虹）
@@ -92,11 +97,11 @@ export default function KGGraph({ focus }: { focus?: string }) {
         container: containerRef.current,
         elements: [...cyNodes, ...cyEdges],
         layout: {
-          name: 'cose', animate: true, animationDuration: 400,
-          idealEdgeLength: 90, nodeOverlap: 14, refresh: 20, fit: true, padding: 36,
-          randomize: false, componentSpacing: 60,
-          nodeRepulsion: () => 480000, edgeElasticity: () => 120,
-          nestingFactor: 1.2, gravity: 90, numIter: 900, initialTemp: 180, coolingFactor: 0.95, minTemp: 1.0,
+          name: 'fcose', animate: true, animationDuration: 900, animationEasing: 'ease-out',
+          quality: 'proof', randomize: true, fit: true, padding: 44,
+          nodeSeparation: 130, idealEdgeLength: () => 120, edgeElasticity: () => 0.35,
+          nodeRepulsion: () => 12000, gravity: 0.28, gravityRange: 3.2,
+          numIter: 2500, tile: true, uniformNodeDimensions: false,
         } as any,
         style: [
           { selector: 'node', style: {
@@ -125,6 +130,17 @@ export default function KGGraph({ focus }: { focus?: string }) {
           { selector: 'edge.hl', style: { 'line-color': '#ffd54a', 'target-arrow-color': '#ffd54a', 'width': 3.2, 'opacity': 1 } as any },
           { selector: '.dim', style: { 'opacity': 0.1 } as any },
           { selector: 'node:selected', style: { 'border-width': 3, 'border-color': '#ffd54a' } as any },
+          // hover 涟漪效果
+          { selector: 'node.hover', style: {
+            'width': (n: any) => n.data('size') * 1.28, 'height': (n: any) => n.data('size') * 1.28,
+            'border-width': 4, 'border-color': '#ffffff',
+            'shadow-blur': 30, 'shadow-color': (n: any) => n.data('color'), 'shadow-opacity': 0.95,
+            'transition-property': 'width height border-width shadow-blur', 'transition-duration': '160ms', 'z-index': 30,
+          } as any },
+          { selector: 'node.hoverNbr', style: { 'border-width': 3, 'border-color': 'rgba(255,255,255,.7)', 'z-index': 15 } as any },
+          { selector: 'edge.hoverEdge', style: {
+            'line-color': '#8fd0ff', 'target-arrow-color': '#8fd0ff', 'width': 3, 'opacity': 1, 'z-index': 15,
+          } as any },
         ],
         wheelSensitivity: 0.2, minZoom: 0.12, maxZoom: 4,
       })
@@ -181,6 +197,21 @@ export default function KGGraph({ focus }: { focus?: string }) {
 
       cy.on('tap', (evt) => {
         if (evt.target === cy) { cy.elements().removeClass('hl dim'); setSelected(null) }
+      })
+
+      // hover 涟漪：悬停节点放大+高亮直连邻居，移出复原
+      cy.on('mouseover', 'node', (evt) => {
+        const n = evt.target
+        n.addClass('hover')
+        n.connectedEdges().addClass('hoverEdge')
+        n.neighborhood('node').addClass('hoverNbr')
+        if (containerRef.current) containerRef.current.style.cursor = 'pointer'
+      })
+      cy.on('mouseout', 'node', (evt) => {
+        const n = evt.target
+        n.removeClass('hover')
+        cy.elements().removeClass('hoverEdge hoverNbr')
+        if (containerRef.current) containerRef.current.style.cursor = 'default'
       })
 
       cyRef.current = cy
