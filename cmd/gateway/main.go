@@ -23,9 +23,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/dedarek/agent-security-gateway/api"
@@ -109,6 +111,14 @@ func serveCmd(args []string) {
 	var evStore *store.Store
 	var dbHandle *sql.DB
 	if cfg.Storage.Driver == "sqlite" && cfg.Storage.DSN != "" {
+		// Single-instance lock: two gateways writing one SQLite file corrupts
+		// the WAL. Refuse to start if another gateway holds the lock.
+		lockPath := filepath.Join(filepath.Dir(cfg.Storage.DSN), ".asg-gateway.lock")
+		lock, err := acquireSingleLock(lockPath)
+		if err != nil {
+			log.Fatalf("single-instance lock %s: %v (another gateway running?)", lockPath, err)
+		}
+		defer lock.release()
 		db, err := db.Open(cfg.Storage.DSN)
 		if err != nil {
 			log.Fatalf("storage db: %v", err)
@@ -531,4 +541,26 @@ func policyHash(paths ...string) string {
 		h.Write(b)
 	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+// singleLock is an advisory O_EXCL lock file guarding the SQLite DB against
+// concurrent gateway processes (dual writers corrupt the WAL).
+type singleLock struct {
+	path string
+}
+
+func acquireSingleLock(path string) (*singleLock, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	fmt.Fprintf(f, "%d\n", os.Getpid())
+	f.Close()
+	return &singleLock{path: path}, nil
+}
+
+func (l *singleLock) release() {
+	if l != nil && l.path != "" {
+		os.Remove(l.path)
+	}
 }
