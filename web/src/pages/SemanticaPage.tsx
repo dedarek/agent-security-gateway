@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
-import KGGraph from '../components/KGGraph'
+import OntologyGraph from '../components/OntologyGraph'
 import { EmptyState } from '../components/EmptyState'
 
-/** SemanticaPage — 知识图谱子页面。
- *  图谱（KGGraph/cytoscape）+ 语义检索 + KG 自然语言问答（/api/kg/ask）。 */
+/** SemanticaPage — 安全本体图谱页。
+ *  三层本体可视化（B 污点血缘 / D 证据链 / E 会话叙事），G6 5.x 渲染 /api/onto/graph。 */
 export default function SemanticaPage() {
   const [ask, setAsk] = useState('')
   const [answer, setAnswer] = useState('')
@@ -59,11 +59,11 @@ export default function SemanticaPage() {
 
       {/* 图谱 */}
       <div className="card card-pad" style={{ marginBottom: 14 }}>
-        <div style={{ height: 460, borderRadius: 8, overflow: 'hidden', border: '1px solid var(--line)' }}>
-          <KGGraph focus="" />
+        <div style={{ height: 520, borderRadius: 8, overflow: 'hidden', border: '1px solid var(--line)' }}>
+          <OntologyGraph focus="" />
         </div>
         <div className="small dim" style={{ marginTop: 8 }}>
-          <b>橙色</b>=智能体 · <b>红色发光</b>=高危拦截 · <b>蓝色</b>=被触碰的敏感资源 · <b>灰色</b>=会话。红色流动虚线代表污点传播路径，点击节点可高亮完整链路。
+          <b>蓝圆</b>=智能体 · <b>灰圆</b>=会话 · <b>橙三角</b>=BLOCK裁决 · <b>绿菱形</b>=敏感资源 · 点节点可下钻证据链（D 层）
         </div>
       </div>
 

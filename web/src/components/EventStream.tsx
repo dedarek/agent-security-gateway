@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { StreamStep } from '../lib/sse'
 import { VerdictBadge } from './VerdictBadge'
 
-const MAX = 200
+const MAX = 500 // 与 sse.ts 的 10 分钟保留窗口一致（硬上限）
 
 /**
  * Live event feed. Steps arrive via SSE push; newest on top; BLOCK rows get
@@ -33,7 +33,8 @@ export function EventStream({ steps, onSelect, live }: {
     <div className="card" style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div className="card-pad row-between" style={{ borderBottom: '1px solid var(--line)', paddingBottom: 10 }}>
         <span className="h-sec">实时事件流</span>
-        <span className="row small" style={{ gap: 6 }}>
+        <span className="row small" style={{ gap: 10, alignItems: 'center' }}>
+          <span className="dim">保留最近 {MAX} 条 · ≥10 分钟</span>
           <span className={`health-dot ${live ? 'health-ok' : 'health-bad'}`} />
           <span className="muted">{live ? 'SSE 实时' : 'SSE 断开 · 轮询降级'}</span>
         </span>

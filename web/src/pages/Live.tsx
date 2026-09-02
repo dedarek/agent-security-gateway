@@ -16,7 +16,7 @@ import { Gauge } from '../components/charts/Gauge'
 import { Trend } from '../components/charts/Trend'
 import { EventStream } from '../components/EventStream'
 import { CAPABILITY_GROUPS } from '../lib/capabilities'
-import ProtectionStatus from '../components/ProtectionStatus'
+import FleetProtection from '../components/FleetProtection'
 import ApprovalQueue from '../components/ApprovalQueue'
 import { CountUp, FadeInCard, AnimatedBar } from '../components/anims'
 
@@ -49,11 +49,10 @@ export default function Live({ streamLive = true }: { streamLive?: boolean }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto' }}>
       <div style={{ padding: '24px 28px 0' }}>
-        <ProtectionStatus />
-        <ApprovalQueue />
-        <div className="row-between" style={{ marginBottom: 20, marginTop: 16 }}>
+        <div className="row-between" style={{ marginBottom: 20 }}>
           <div>
             <h1 className="h-page" style={{ fontSize: 22, fontWeight: 600 }}>安全概览</h1>
+            <div className="small dim" style={{ marginTop: 2 }}>所有已接入智能体的防护状态与安全态势</div>
           </div>
           <div className="row" style={{ gap: 12 }}>
             <div className="seg">
@@ -64,6 +63,10 @@ export default function Live({ streamLive = true }: { streamLive?: boolean }) {
             <span className="badge badge-allow">实时连接中</span>
           </div>
         </div>
+
+        {/* 防护总览: 所有 agent 平铺, 不再单 agent hero */}
+        <FleetProtection />
+        <ApprovalQueue />
 
         {/* 顶部核心 KPI 卡片 */}
         <div className="row" style={{ gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
@@ -250,14 +253,24 @@ function AgentDrawer({ agentId, onClose, onDeepDive }: { agentId: string | null;
   const qc = useQueryClient()
   const { data, isLoading } = useQuery({ queryKey: ['agent-detail', agentId], queryFn: () => api.agentDetail(agentId!), enabled: !!agentId, refetchInterval: 4000 })
   const { data: policies } = useQuery({ queryKey: ['policies'], queryFn: () => api.policies(), enabled: !!agentId })
-  const upsert = useMutation({
-    mutationFn: (body: any) => api.upsertPolicy(body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['policies'] }),
-  })
   const [ctrlOpen, setCtrlOpen] = useState(false)
   const [aliasEdit, setAliasEdit] = useState<string | null>(null)
   const [aliasVal, setAliasVal] = useState('')
   const [deleteConfirm, setDeleteConfirm] = useState(false)
+  const [policyErr, setPolicyErr] = useState<string | null>(null)
+  const [policyOk, setPolicyOk] = useState<string | null>(null)
+  const upsert = useMutation({
+    mutationFn: (body: any) => api.upsertPolicy(body),
+    onSuccess: () => {
+      setPolicyErr(null)
+      setPolicyOk('已保存 ✓')
+      qc.invalidateQueries({ queryKey: ['policies'] })
+      setTimeout(() => setPolicyOk(null), 1500)
+    },
+    onError: (e: any) => {
+      setPolicyErr(`保存失败: ${e?.message || String(e)}`)
+    },
+  })
   const setAlias = useMutation({
     mutationFn: ({ id, alias }: { id: string; alias: string }) => api.setAlias(id, alias),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['agent-detail', agentId] }); qc.invalidateQueries({ queryKey: ['agents'] }); setAliasEdit(null) },
@@ -351,6 +364,8 @@ function AgentDrawer({ agentId, onClose, onDeepDive }: { agentId: string | null;
     <Drawer open={ctrlOpen} onClose={() => setCtrlOpen(false)} title={a ? `${displayAlias(a)} · 能力管控` : '能力管控'} width={440}>
         <div className="col" style={{ gap: 14 }}>
           <div className="small dim" style={{ marginBottom: 0 }}>允许 = 直接放行 · 确认 = 需人工确认 · 拦截 = 直接阻断</div>
+          {policyErr && <div className="card" style={{ padding: '8px 12px', borderColor: 'var(--block)', background: 'rgba(217,48,37,.06)', color: 'var(--block)', fontSize: 12.5 }}>⚠ {policyErr}</div>}
+          {policyOk && <div className="card" style={{ padding: '8px 12px', borderColor: 'var(--allow)', background: 'rgba(30,142,62,.06)', color: 'var(--allow)', fontSize: 12.5 }}>{policyOk}</div>}
           {CAPABILITY_GROUPS.map((group) => (
             <section key={group.id}>
               <div className="h-sec" style={{ marginBottom: 2 }}>{group.label}</div>

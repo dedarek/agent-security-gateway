@@ -21,7 +21,13 @@ export type StreamStatus = 'connecting' | 'live' | 'down'
  *  - "activity" → appends to a local ring buffer consumed by the live feed
  * Reconnects with exponential backoff (1s→2s→…→15s cap). Falls back: pages
  * keep their refetchInterval polling, so a dead stream degrades gracefully.
+ *
+ * Retention: keep at least RETENTION_MS (10 min) of history, capped at MAX_STEPS.
  */
+
+const RETENTION_MS = 10 * 60 * 1000 // 至少保留 10 分钟
+const MAX_STEPS = 500                // 硬上限: 防内存无限增长
+
 export function useEventStream(onActivity?: (step: StreamStep) => void): StreamStatus {
   const qc = useQueryClient()
   const [status, setStatus] = useState<StreamStatus>('connecting')
@@ -53,7 +59,16 @@ export function useEventStream(onActivity?: (step: StreamStep) => void): StreamS
       es.addEventListener('activity', (e) => {
         try {
           const step = JSON.parse((e as MessageEvent).data) as StreamStep
-          qc.setQueryData<StreamStep[]>(['stream-activity'], (old = []) => [step, ...old].slice(0, 200))
+          qc.setQueryData<StreamStep[]>(['stream-activity'], (old = []) => {
+            const next = [step, ...old]
+            const cutoff = Date.now() - RETENTION_MS
+            // 去掉超过 10 分钟的旧条目 (at 是 ISO 时间)
+            const inWindow = next.filter((s) => {
+              const t = s.at ? new Date(s.at).getTime() : 0
+              return t >= cutoff || t === 0
+            })
+            return inWindow.slice(0, MAX_STEPS)
+          })
           cbRef.current?.(step)
         } catch { /* ignore malformed */ }
       })
