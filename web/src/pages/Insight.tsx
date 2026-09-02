@@ -44,27 +44,25 @@ function GraphLaunch() {
   const { data: status } = useQuery({ queryKey: ['status'], queryFn: api.status, refetchInterval: 10000 })
   const kg = status?.kg || {}
   const ready = kg.graph_ready
-  const n = kg.node_count ?? kg.entities ?? 0
   return (
     <div style={{ padding: 22 }}>
       <div className="card card-pad" style={{ marginBottom: 12 }}>
         <div className="row-between" style={{ marginBottom: 10 }}>
           <div>
-            <div className="h-sec">知识图谱 · Semantica</div>
+            <div className="h-sec h-sec-accent">安全知识图谱</div>
             <div className="row" style={{ gap: 10, marginTop: 6 }}>
-              <span className={`badge ${ready ? 'badge-allow' : 'badge-confirm'}`}>{ready ? '● graph ready' : '◐ warming up'}</span>
-              <span className="small dim">{n} 节点 · 本体导出 / 行为事件</span>
+              <span className={`badge ${ready ? 'badge-allow' : 'badge-confirm'}`}>{ready ? '● 实时' : '◐ 构建中'}</span>
+              <span className="small dim">智能体 · 拦截事件 · 敏感资源 的关系全景</span>
             </div>
           </div>
-          <a className="btn" href="/explorer/" target="_blank" rel="noreferrer">在 Semantica 中打开 →</a>
+          <a className="btn" href="/explorer/" target="_blank" rel="noreferrer">全屏浏览 →</a>
         </div>
         <div style={{ height: 480, borderRadius: 8, overflow: 'hidden', border: '1px solid var(--line)' }}>
           <KGGraph focus="" />
         </div>
       </div>
       <div className="small dim">
-        图谱数据来自 <code>/api/onto/graph</code> 统一本体（B 污点血缘 · D 证据链 · E 会话叙事）；
-        节点按类型配色（Agent 橙 / Tool 蓝 / Event 灰 / ExternalActor 红），taint 边高亮。
+        每个节点是一个真实实体：<b>智能体</b>发起操作，被<b>拦截</b>时留下红色高危事件，并标注它试图触碰的<b>敏感资源</b>（如凭证文件）。点击任意节点即可高亮其完整安全链路。
       </div>
     </div>
   )

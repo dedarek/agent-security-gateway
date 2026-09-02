@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import cytoscape from 'cytoscape'
 import { api } from '../lib/api'
-import { buildRiskSubgraph, type GraphMode, type KGNode, type KGEdge } from '../lib/graphModel'
+import { buildOntoSubgraph, type GraphMode, type KGNode, type KGEdge } from '../lib/graphModel'
 import { Drawer } from './Drawer'
 import { VerdictBadge } from './VerdictBadge'
 import { Skeleton } from './Skeleton'
@@ -19,9 +19,9 @@ const TYPE_SHAPE: Record<string, string> = {
   ExternalActor: 'hexagon',
 }
 
-function shortLabel(id: string, content: string, max = 20): string {
+function shortLabel(id: string, content: string, max = 28): string {
   const raw = content || id
-  const cleaned = raw.replace(/^evt:/, '').replace(/^agent:@?/, '@').replace(/^tool:/, '')
+  const cleaned = raw.replace(/^evt:/, '').replace(/^agent:@?/, '@').replace(/^tool:/, '').replace(/^org:file:/, '')
   return cleaned.length > max ? cleaned.slice(0, max) + '…' : cleaned
 }
 
@@ -39,7 +39,6 @@ export default function KGGraph({ focus }: { focus?: string }) {
   const [mode, setMode] = useState<GraphMode>('risk')
   const [stats, setStats] = useState<{ shown: number; rawNodes: number; omitted: number; edges: number } | null>(null)
   const [selected, setSelected] = useState<KGNode | null>(null)
-  const [tracing, setTracing] = useState(false)
   const rawRef = useRef<{ nodes: KGNode[]; edges: KGEdge[] } | null>(null)
   const nodeById = useRef<Map<string, KGNode>>(new Map())
   const animRef = useRef<number | null>(null)
@@ -50,13 +49,13 @@ export default function KGGraph({ focus }: { focus?: string }) {
     if (first) setLoading(true)
     setErr(null)
     try {
-      // 每次渲染都重拉数据（动态刷新），不缓存 rawRef
-      const [nr, er] = await Promise.all([api.kgNodes(), api.kgEdges()])
-      const n = Array.isArray((nr as any)?.nodes) ? (nr as any).nodes : Array.isArray(nr) ? nr : []
-      const e = Array.isArray((er as any)?.edges) ? (er as any).edges : Array.isArray(er) ? er : []
-      rawRef.current = { nodes: n, edges: e }
-      nodeById.current = new Map(n.map((x: KGNode) => [x.id, x]))
-      const { nodes, edges, stats } = buildRiskSubgraph(rawRef.current.nodes, rawRef.current.edges, m)
+      // 拉取「统一本体」数据（agent/origin/story/verdict），而非底层 probe 图
+      const og: any = await api.ontoGraph()
+      const rawN = Array.isArray(og?.nodes) ? og.nodes : []
+      const rawEdg = Array.isArray(og?.edges) ? og.edges : []
+      rawRef.current = { nodes: rawN, edges: rawEdg }
+      const { nodes, edges, stats } = buildOntoSubgraph({ nodes: rawN, edges: rawEdg }, m)
+      nodeById.current = new Map(nodes.map((x: KGNode) => [x.id, x]))
       setStats({ shown: stats.shown, rawNodes: stats.rawNodes, omitted: stats.omitted, edges: edges.length })
 
       if (cyRef.current) { cyRef.current.destroy(); cyRef.current = null }
@@ -101,12 +100,12 @@ export default function KGGraph({ focus }: { focus?: string }) {
         } as any,
         style: [
           { selector: 'node', style: {
-            'background-color': 'data(color)', 'label': 'data(label)', 'color': '#e8eef7',
-            'font-size': 8, 'font-weight': 600, 'text-valign': 'bottom', 'text-halign': 'center', 'text-margin-y': 4,
-            'text-wrap': 'wrap', 'text-max-width': 90, 'width': 'data(size)', 'height': 'data(size)',
+            'background-color': 'data(color)', 'label': 'data(label)', 'color': '#eaf1fb',
+            'font-size': 11, 'font-weight': 700, 'text-valign': 'bottom', 'text-halign': 'center', 'text-margin-y': 6,
+            'text-wrap': 'wrap', 'text-max-width': 140, 'width': 'data(size)', 'height': 'data(size)',
             'border-width': 2, 'border-color': 'rgba(255,255,255,.35)', 'shape': 'data(shape)', 'overlay-opacity': 0,
-            'text-outline-width': 3, 'text-outline-color': '#0a1224',
-            'background-opacity': 0.95,
+            'text-outline-width': 3, 'text-outline-color': '#060b18',
+            'background-opacity': 0.96,
           } as any },
           { selector: 'node[isBlock]', style: {
             'border-width': 3, 'border-color': '#ff5f56',
@@ -225,36 +224,6 @@ export default function KGGraph({ focus }: { focus?: string }) {
     setSelected(null)
   }
 
-  // Trace-to-source: pick the lowest-risk *source* node among highlighted
-  // upstream and call /api/kg/graph/path to draw the full shortest lineage.
-  const handleTrace = async () => {
-    if (!selected || !cyRef.current) return
-    setTracing(true)
-    try {
-      const cy = cyRef.current
-      const hl = cy.nodes('.hl').toArray()
-      // find a plausible source: Agent/Tool nodes in the highlighted upstream
-      const sourceNode = hl.find((n) => n.data('type') === 'Agent') || hl[hl.length - 1]
-      if (!sourceNode) return
-      const res: any = await api.kgPath(sourceNode.id(), selected.id)
-      const path: string[] = res?.path || res?.nodes?.map((n: any) => n.id) || []
-      if (path.length) {
-        cy.elements().removeClass('hl dim')
-        cy.elements().addClass('dim')
-        path.forEach((id) => { const n = cy.getElementById(id); if (n.length) n.removeClass('dim').addClass('hl') })
-        // highlight edges along the path
-        for (let i = 0; i < path.length - 1; i++) {
-          const a = path[i]; const b = path[i + 1]
-          cy.edges().toArray().forEach((e) => {
-            const s = e.data('source'); const t = e.data('target')
-            if ((s === a && t === b) || (s === b && t === a)) e.removeClass('dim').addClass('hl')
-          })
-        }
-      }
-    } catch { /* path may not exist — keep BFS highlight */ }
-    setTracing(false)
-  }
-
   // 自动刷新：每 30s 重拉图谱数据并重排（动态高帧）
   useEffect(() => {
     render(mode)
@@ -279,8 +248,8 @@ export default function KGGraph({ focus }: { focus?: string }) {
           <button className="btn" onClick={handleReset}>重置高亮</button>
           <button className="btn" onClick={() => cyRef.current?.fit(undefined, 36)}>居中适配</button>
           <span className="row small dim" style={{ gap: 10 }}>
-            <Legend c="#ffb020" t="Agent" /><Legend c="#3ba7ff" t="Tool" />
-            <Legend c="#7d8ca3" t="Event" /><Legend c="#ff4d5e" t="BLOCK" />
+            <Legend c="#ffb020" t="智能体" /><Legend c="#ff4d5e" t="拦截" />
+            <Legend c="#3ba7ff" t="敏感资源" /><Legend c="#7d8ca3" t="会话" />
           </span>
         </div>
       </div>
@@ -300,7 +269,7 @@ export default function KGGraph({ focus }: { focus?: string }) {
       {loading && <Skeleton h={420} style={{ marginTop: -420, borderRadius: 'var(--r-m)' }} />}
 
       <div className="small dim" style={{ marginTop: 8 }}>
-        拖拽 · 滚轮缩放 · 点击节点高亮上游 taint 链 · BLOCK 节点带红色外发光，taint 边为红色流动虚线
+        智能体 ▸ 触发拦截 ▸ 涉及敏感资源 · 点击任意节点高亮它的完整安全链路 · 红色发光节点=高危拦截，红色流动虚线=污点传播
       </div>
 
       <Drawer open={!!selected} onClose={() => setSelected(null)}
@@ -308,26 +277,30 @@ export default function KGGraph({ focus }: { focus?: string }) {
         {selected && (
           <div className="col" style={{ gap: 14 }}>
             <dl className="kv">
-              <dt>ID</dt><dd className="mono">{selected.id}</dd>
-              <dt>类型</dt><dd>{selected.type}</dd>
-              <dt>裁决</dt><dd><VerdictBadge v={selected.properties?.verdict} /></dd>
-              <dt>风险分</dt><dd>{selected.properties?.risk ?? 0}</dd>
+              <dt>类型</dt><dd>{typeCN(selected.type, selected.properties)}</dd>
+              {selected.properties?.verdict === 'BLOCK' && <><dt>裁决</dt><dd><VerdictBadge v="BLOCK" /></dd></>}
+              {selected.properties?.risk != null && Number(selected.properties?.risk) > 0 && <><dt>风险分</dt><dd>{selected.properties?.risk}</dd></>}
+              {selected.properties?.tool && <><dt>工具</dt><dd className="mono">{selected.properties.tool}</dd></>}
+              {selected.properties?.agent && <><dt>智能体</dt><dd>{selected.properties.agent}</dd></>}
+              {selected.properties?.session && <><dt>会话</dt><dd className="mono">{selected.properties.session}</dd></>}
+              {selected.properties?.steps != null && <><dt>步数</dt><dd>{selected.properties.steps}</dd></>}
+              {selected.properties?.at && <><dt>时间</dt><dd>{selected.properties.at}</dd></>}
+              {selected.properties?.kind === 'resource' && <><dt>敏感</dt><dd>{selected.properties?.sensitive ? '是 · 凭证/密钥' : '否'}</dd></>}
+              {selected.properties?.reads != null && <><dt>被读取</dt><dd>{selected.properties.reads} 次</dd></>}
             </dl>
-            {selected.properties?.rationale && (
-              <div className="card card-pad">
-                <div className="h-sec" style={{ marginBottom: 6 }}>判定理由</div>
-                <div className="small" style={{ wordBreak: 'break-all' }}>{selected.properties.rationale}</div>
-              </div>
-            )}
-            <button className="btn btn-primary" disabled={tracing} onClick={handleTrace}>
-              {tracing ? '追溯中…' : '追溯到源头 →'}
-            </button>
-            <div className="small dim">调用 /api/kg/graph/path 画出从敏感源到该事件的完整最短血缘路径。</div>
+            <div className="small dim">已在图中高亮该节点的完整安全链路（上游智能体 · 拦截事件 · 涉及资源）。点击空白处取消高亮。</div>
           </div>
         )}
       </Drawer>
     </div>
   )
+}
+
+function typeCN(type: string, props?: Record<string, any>): string {
+  if (props?.kind === 'resource') return '敏感资源'
+  if (type === 'Agent') return '智能体'
+  if (type === 'Event') return props?.verdict === 'BLOCK' ? '高危拦截' : '会话'
+  return type
 }
 
 function Legend({ c, t }: { c: string; t: string }) {

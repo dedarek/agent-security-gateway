@@ -17,7 +17,6 @@ export default function SemanticaPage() {
   const { data: status } = useQuery({ queryKey: ['status'], queryFn: api.status, refetchInterval: 10000 })
   const kg = status?.kg || {}
   const ready = kg.graph_ready
-  const n = kg.node_count ?? kg.entities ?? 0
 
   const doAsk = async () => {
     if (!ask.trim() || asking) return
@@ -49,13 +48,12 @@ export default function SemanticaPage() {
     <div style={{ padding: 22, maxWidth: 1200, margin: '0 auto' }}>
       <div className="row-between" style={{ marginBottom: 14, flexWrap: 'wrap', gap: 10 }}>
         <div>
-          <h1 className="h-page">知识图谱 · Semantica</h1>
-          <div className="small dim">行为事件 → 本体图（Agent/Event/Tool）+ 语义检索 + KG 问答</div>
+          <h1 className="h-page">安全知识图谱</h1>
+          <div className="small dim">把智能体的每一次高危操作，还原成「谁 · 做了什么 · 碰了哪些敏感资源」的关系图</div>
         </div>
         <div className="row" style={{ gap: 10 }}>
-          <span className={`badge ${ready ? 'badge-allow' : 'badge-confirm'}`}>{ready ? '● graph ready' : '◐ warming up'}</span>
-          <span className="small dim">{n} 节点</span>
-          <a className="btn" href="/explorer/" target="_blank" rel="noreferrer">Semantica Explorer ↗</a>
+          <span className={`badge ${ready ? 'badge-allow' : 'badge-confirm'}`}>{ready ? '● 实时' : '◐ 构建中'}</span>
+          <a className="btn" href="/explorer/" target="_blank" rel="noreferrer">全屏浏览 ↗</a>
         </div>
       </div>
 
@@ -65,7 +63,7 @@ export default function SemanticaPage() {
           <KGGraph focus="" />
         </div>
         <div className="small dim" style={{ marginTop: 8 }}>
-          节点配色：Agent 橙 / Tool 蓝 / Event 灰 / ExternalActor 红；taint 边高亮。数据来自 <code>/api/onto/graph</code> 统一本体（B 污点血缘 · D 证据链 · E 会话叙事）。
+          <b>橙色</b>=智能体 · <b>红色发光</b>=高危拦截 · <b>蓝色</b>=被触碰的敏感资源 · <b>灰色</b>=会话。红色流动虚线代表污点传播路径，点击节点可高亮完整链路。
         </div>
       </div>
 
